@@ -1,0 +1,54 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# --- Tooling caches ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# --- Environment / secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Data: never commit datasets. Tracked by DVC from Phase 2 onward. ---
+data/raw/*
+data/interim/*
+data/processed/*
+data/external/*
+!data/**/.gitkeep
+!data/README.md
+
+# --- Artifacts: binary model/index/embedding outputs stay out of git. ---
+# Metadata JSON is intentionally NOT ignored: it is the human-auditable record
+# of what was trained, and it is small. See ADR-006.
+artifacts/models/*
+artifacts/embeddings/*
+artifacts/indexes/*
+artifacts/mappings/*
+!artifacts/**/.gitkeep
+!artifacts/README.md
+
+# --- Experiment tracking / reports ---
+mlruns/
+reports/figures/*
+reports/metrics/*
+!reports/**/.gitkeep
+
+# --- Notebooks ---
+.ipynb_checkpoints/
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,49 @@
+# ---------------------------------------------------------------------------
+# OmniRank base configuration.
+#
+# Load order (later wins):
+#   1. this file
+#   2. the domain/profile overlays named under `include`
+#   3. any explicit overlay passed to load_config(overlays=[...])
+#   4. environment variables  OMNIRANK__<SECTION>__<KEY>
+#
+# Secrets are NEVER stored here. Provide them via .env / the environment.
+# ---------------------------------------------------------------------------
+project_name: omnirank
+environment: local
+seed: 42
+
+include:
+  - data/ecommerce.yaml
+  - models/retrieval.yaml
+  - evaluation/default.yaml
+  - serving/local.yaml
+
+device:
+  preferred: auto        # auto | cpu | mps | cuda
+  allow_cuda: false      # `auto` never picks cuda; this gates an explicit request
+
+logging:
+  level: INFO            # DEBUG | INFO | WARNING | ERROR | CRITICAL
+  format: console        # console | json
+  include_timestamp: true
+  # Keys scrubbed from every log event before rendering. See core/logging.py.
+  redact_keys:
+    - password
+    - token
+    - secret
+    - authorization
+    - api_key
+
+paths:
+  data_root: data
+  artifact_root: artifacts
+  raw_dir: data/raw
+  interim_dir: data/interim
+  processed_dir: data/processed
+  external_dir: data/external
+  mappings_dir: artifacts/mappings
+  models_dir: artifacts/models
+  embeddings_dir: artifacts/embeddings
+  indexes_dir: artifacts/indexes
+  metadata_dir: artifacts/metadata

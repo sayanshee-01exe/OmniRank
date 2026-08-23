@@ -1,0 +1,52 @@
+# ---------------------------------------------------------------------------
+# Local single-machine serving profile.
+#
+# Deployment profiles differ ONLY in this file. There is one deployable unit
+# (the modular monolith) - see ADR-001.
+# ---------------------------------------------------------------------------
+api:
+  host: 127.0.0.1
+  port: 8000
+  reload: true
+  title: OmniRank API
+  version: v1
+  # Request bodies / query params are logged without user-identifying values.
+  log_requests: true
+
+serving:
+  default_top_k: 20
+  max_top_k: 200
+  # Wall-clock budget for the whole pipeline. Exceeding it triggers fallback
+  # rather than a slow response. Enforced from Phase 2.
+  latency_budget_ms: 300
+  # Serve only items marked available; enforced in post-ranking (component 13).
+  filter_unavailable: true
+
+fallback:
+  # Ordered chain, tried top to bottom. The final entry must always be able to
+  # answer, so the API never returns an empty 200. See the fallback flow in
+  # docs/architecture/online_serving_flow.md.
+  chain:
+    - category_popularity
+    - global_popularity
+  # Responses produced by a fallback are always flagged in the payload.
+  mark_in_response: true
+
+database:
+  host: localhost
+  port: 5432
+  name: omnirank
+  user: omnirank
+  # password comes from OMNIRANK__DATABASE__PASSWORD - never stored in YAML
+  pool_size: 5
+  pool_timeout_seconds: 10
+  echo_sql: false
+
+redis:
+  host: localhost
+  port: 6379
+  db: 0
+  # password comes from OMNIRANK__REDIS__PASSWORD
+  key_prefix: "omnirank:"
+  recommendation_ttl_seconds: 300
+  socket_timeout_seconds: 2

@@ -1,0 +1,75 @@
+# ---------------------------------------------------------------------------
+# Retrieval / ranking stage configuration.
+#
+# PHASE 1 STATUS: these blocks are declared and validated, but no model that
+# consumes them is implemented yet. They exist now so that Phase 2 adds model
+# code without changing the config contract. `enabled: false` everywhere means
+# the serving layer reports "not ready" rather than silently returning nothing.
+# ---------------------------------------------------------------------------
+models:
+  # Per-generator candidate budgets, merged by the aggregator (component 11).
+  candidate_generators:
+    popularity:
+      enabled: false
+      phase: 2
+      top_k: 200
+      # Popularity is time-decayed so it does not freeze on all-time winners.
+      half_life_days: 30
+    matrix_factorization:
+      enabled: false
+      phase: 2
+      top_k: 200
+      factors: 64
+    lightgcn:
+      enabled: false
+      phase: 3
+      top_k: 300
+      embedding_dim: 64
+      num_layers: 3
+    two_tower:
+      enabled: false
+      phase: 4
+      top_k: 300
+      embedding_dim: 128
+    sasrec:
+      enabled: false
+      phase: 3
+      top_k: 200
+      embedding_dim: 64
+      num_blocks: 2
+      num_heads: 2
+
+  aggregation:
+    strategy: weighted_round_robin   # weighted_round_robin | score_union
+    max_candidates: 1000
+    # Source priority when the same item arrives from several generators; the
+    # merged candidate keeps every contributing source in `sources`.
+    source_weights:
+      sasrec: 1.0
+      lightgcn: 0.9
+      two_tower: 0.8
+      matrix_factorization: 0.5
+      popularity: 0.2
+
+  ranker:
+    enabled: false
+    phase: 5
+    implementation: lightgbm         # lightgbm | catboost  (see ADR-008)
+    objective: lambdarank
+    num_leaves: 63
+    learning_rate: 0.05
+    n_estimators: 500
+
+  reranker:
+    enabled: false
+    phase: 5
+    strategy: mmr
+    # 1.0 = pure relevance, 0.0 = pure diversity.
+    lambda_relevance: 0.7
+
+  index:
+    backend: faiss                   # faiss now, pgvector/qdrant later (ADR-004)
+    metric: inner_product            # inner_product | l2
+    # Bumped whenever the index build procedure changes in a way that makes an
+    # old index unreadable/incomparable. Enforced against artifact metadata.
+    index_version: 1

@@ -1,0 +1,52 @@
+# ---------------------------------------------------------------------------
+# Domain profile: e-commerce.
+#
+# A "domain profile" is the ONLY place a vertical is named. Swapping this file
+# for courses.yaml / jobs.yaml / movies.yaml retargets the whole system without
+# touching src/. See ADR-001 and docs/architecture/system_architecture.md.
+# ---------------------------------------------------------------------------
+data:
+  domain: ecommerce
+  dataset_name: ecommerce-subset
+  dataset_version: v0            # bumped whenever the raw snapshot changes
+
+  # Which interaction events exist in this domain, and the implicit-feedback
+  # weight each carries. Weights are used by Phase 2 retrieval training.
+  event_types:
+    view: 1.0
+    click: 2.0
+    wishlist: 3.0
+    cart: 4.0
+    purchase: 5.0
+    rating: 3.0
+
+  # Events at or above this weight count as a positive label for evaluation.
+  positive_event_threshold: 2.0
+
+  # Validation bounds enforced by omnirank.data.validation.
+  validation:
+    min_price: 0.0
+    max_price: 1000000.0
+    min_rating: 1.0
+    max_rating: 5.0
+    # Reject timestamps outside this window as clock errors / corrupt rows.
+    min_timestamp: "2000-01-01T00:00:00Z"
+    allow_future_timestamps: false
+    drop_duplicate_events: true
+
+  # Users/items below these thresholds are removed before splitting (k-core).
+  filtering:
+    min_interactions_per_user: 5
+    min_interactions_per_item: 5
+
+  splitting:
+    strategy: temporal_global     # temporal_global | temporal_per_user | leave_one_out
+    validation_fraction: 0.1
+    test_fraction: 0.1
+    # Interactions inside this window before each boundary are dropped to stop
+    # near-boundary leakage between splits. See ADR-002.
+    embargo_days: 0
+
+  sequences:
+    max_length: 50
+    min_length: 2

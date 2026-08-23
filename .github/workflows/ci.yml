@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # CI must never depend on a local .env or on a developer's shell.
+  OMNIRANK__ENVIRONMENT: ci
+  OMNIRANK__LOGGING__FORMAT: json
+
+jobs:
+  check:
+    name: lint / typecheck / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      # Dev extras only. The `ml` extra (torch, faiss, lightgbm) is deliberately
+      # not installed: Phase 1 has no code that needs it, and pulling ~2 GB of
+      # wheels would make CI slow enough that people stop reading it.
+      - name: Install project
+        run: uv pip install --system -e ".[dev]"
+
+      - name: Ruff (lint)
+        run: ruff check src tests scripts
+
+      - name: Ruff (format check)
+        run: ruff format --check src tests scripts
+
+      - name: MyPy (strict)
+        run: mypy
+
+      - name: Pytest
+        run: pytest --cov=omnirank --cov-report=term-missing
+
+      # A contract nobody can read is not a contract. This fails if the app
+      # cannot produce its OpenAPI document.
+      - name: OpenAPI document builds
+        run: |
+          python -c "
+          import json
+          from omnirank.api.app import create_app
+          from omnirank.core.config import load_config
+          spec = create_app(load_config('configs')).openapi()
+          print(f'{len(spec[\"paths\"])} paths documented')
+          "

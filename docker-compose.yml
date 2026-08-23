@@ -1,0 +1,58 @@
+# Local backing services for OmniRank.
+#
+# Deliberately two containers and no application service. The API runs on the
+# host so that an edit-run cycle needs no rebuild, and OmniRank is one process
+# by design (ADR-001) - there is nothing to orchestrate.
+#
+#   make up    # start
+#   make down  # stop
+#
+# Nothing in Phase 1 requires these to be running: the test suite is offline and
+# `make serve` starts without them.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: omnirank-postgres
+    environment:
+      POSTGRES_DB: ${OMNIRANK__DATABASE__NAME:-omnirank}
+      POSTGRES_USER: ${OMNIRANK__DATABASE__USER:-omnirank}
+      # No default: a database that starts with a guessable password is a
+      # habit that follows you to staging. Set it in .env.
+      POSTGRES_PASSWORD: ${OMNIRANK__DATABASE__PASSWORD:?set OMNIRANK__DATABASE__PASSWORD in .env}
+    ports:
+      - "${OMNIRANK__DATABASE__PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Applied once, on first initialisation of an empty data directory.
+      # Re-apply after editing by running `docker compose down -v` first.
+      - ./src/omnirank/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${OMNIRANK__DATABASE__USER:-omnirank}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: omnirank-redis
+    # Bounded memory with LRU eviction: every key in Redis is regenerable
+    # (ADR-005), so evicting under pressure is correct behaviour, not data loss.
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+    ports:
+      - "${OMNIRANK__REDIS__PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    name: omnirank_postgres_data

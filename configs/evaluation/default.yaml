@@ -1,0 +1,38 @@
+# ---------------------------------------------------------------------------
+# Offline evaluation protocol.
+#
+# PHASE 1 STATUS: contract only. Metric implementations land in Phase 2
+# alongside the first trained baseline (see docs/phase_reports/phase_01_report.md).
+# ---------------------------------------------------------------------------
+evaluation:
+  k_values: [5, 10, 20, 50]
+
+  # Accuracy metrics computed for every k above.
+  metrics:
+    - recall
+    - precision
+    - ndcg
+    - map
+    - mrr
+    - hit_rate
+
+  # Beyond-accuracy metrics. Required from the first baseline onward so that
+  # diversity regressions are visible before the reranker exists.
+  beyond_accuracy_metrics:
+    - coverage
+    - novelty
+    - intra_list_diversity
+    - gini
+
+  # Candidates the user already interacted with in the training window are
+  # removed before scoring. Turning this off silently inflates every metric.
+  filter_seen: true
+
+  # full = rank against the entire catalogue (honest, slower).
+  # sampled = rank against N sampled negatives (fast, biased - dev loops only).
+  protocol: full
+  num_sampled_negatives: 100
+
+  # An evaluation run fails loudly rather than reporting a partial table when
+  # fewer than this fraction of test users produced recommendations.
+  min_user_coverage: 0.95
