@@ -1,0 +1,79 @@
+{
+  "dataset_name": "pixelrec50k",
+  "interactions": {
+    "event_types": {
+      "interaction": 989494
+    },
+    "exact_duplicate_rows": 0,
+    "interactions_per_item": {
+      "count": 82865,
+      "max": 146.0,
+      "mean": 11.941037,
+      "median": 6.0,
+      "min": 1.0,
+      "quantiles": {
+        "p1": 1.0,
+        "p25": 2.0,
+        "p5": 1.0,
+        "p50": 6.0,
+        "p75": 16.0,
+        "p90": 31.0,
+        "p95": 43.0,
+        "p99": 73.0
+      },
+      "std": 15.193673
+    },
+    "interactions_per_user": {
+      "count": 50000,
+      "max": 434.0,
+      "mean": 19.78988,
+      "median": 14.0,
+      "min": 6.0,
+      "quantiles": {
+        "p1": 7.0,
+        "p25": 11.0,
+        "p5": 8.0,
+        "p50": 14.0,
+        "p75": 22.0,
+        "p90": 36.0,
+        "p95": 50.0,
+        "p99": 91.0
+      },
+      "std": 17.690132
+    },
+    "interactions_with_unknown_item": 0,
+    "rows": 989494,
+    "sparsity": 0.999761179,
+    "timestamp_range": {
+      "max_epoch": 1656087360,
+      "max_utc": "2022-06-24T16:16:00+00:00",
+      "min_epoch": 1328292931,
+      "min_utc": "2012-02-03T18:15:31+00:00",
+      "span_days": 3793
+    },
+    "unique_items": 82865,
+    "unique_users": 50000
+  },
+  "items": {
+    "distinct_categories": 108,
+    "duplicate_item_ids": 0,
+    "items_without_interactions": 0,
+    "rows": 82865
+  },
+  "source_files": [
+    {
+      "bytes": 28124439,
+      "name": "interaction.csv",
+      "path": "data/raw/pixelrec50k/interaction.csv",
+      "rows": 989494,
+      "sha256": "638b53ec100f760cb9bd540c361f6d6e3617c81b1c054ced63fffa41da909e4d"
+    },
+    {
+      "bytes": 24973166,
+      "name": "item_info.csv",
+      "path": "data/raw/pixelrec50k/item_info.csv",
+      "rows": 82865,
+      "sha256": "a073c2c65900f215a8137929b27dc57cf6f4f8fa11453a5c74fa8ff3a730a04e"
+    }
+  ]
+}

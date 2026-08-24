@@ -6,7 +6,8 @@ PIP     := uv pip
 VENV    := .venv
 
 .DEFAULT_GOAL := help
-.PHONY: help setup install lint format typecheck test test-unit test-integration check serve up down clean
+.PHONY: help setup install lint format typecheck test test-unit test-integration check \
+        serve up down clean download-data prepare-data validate-data profile-data
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -43,6 +44,18 @@ test-integration:  ## Integration tests only
 	$(PYTHON) -m pytest tests/integration -m integration
 
 check: lint typecheck test  ## Lint + typecheck + test (what CI runs)
+
+download-data:  ## Download PixelRec50K (51 MB; --with-features adds 17.3 GB)
+	$(PYTHON) scripts/download_pixelrec50k.py
+
+prepare-data:  ## Build the processed PixelRec50K dataset
+	$(PYTHON) scripts/prepare_data.py --config configs/data/pixelrec50k.yaml --overwrite
+
+validate-data:  ## Check the raw source files exist and match the expected schema
+	$(PYTHON) scripts/prepare_data.py --config configs/data/pixelrec50k.yaml --validate-only
+
+profile-data:  ## Profile the raw dataset only, then stop
+	$(PYTHON) scripts/prepare_data.py --config configs/data/pixelrec50k.yaml --profile-only
 
 serve:  ## Run the API locally
 	$(PYTHON) scripts/serve.py

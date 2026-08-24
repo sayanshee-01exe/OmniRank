@@ -1,0 +1,421 @@
+{
+  "cleaning": {
+    "rejected_by_reason": {},
+    "steps": [
+      {
+        "input_rows": 82865,
+        "modified_rows": 0,
+        "output_rows": 82865,
+        "reason_counts": {},
+        "removed_rows": 0,
+        "step": "clean_items"
+      },
+      {
+        "input_rows": 989494,
+        "modified_rows": 0,
+        "output_rows": 989494,
+        "reason_counts": {},
+        "removed_rows": 0,
+        "step": "clean_interactions"
+      }
+    ],
+    "total_rejected": 0
+  },
+  "counts": {
+    "processed_interactions": 975976,
+    "processed_items": 69347,
+    "processed_users": 50000,
+    "raw_interactions": 989494,
+    "raw_items": 82865,
+    "raw_users": 50000
+  },
+  "duplicates_removed": 0,
+  "features": [
+    {
+      "available": false,
+      "coverage": 0.0,
+      "dimension": null,
+      "dimension_mismatches": 0,
+      "dtype": "float32",
+      "duplicate_ids": 0,
+      "encoder": null,
+      "items_expected": 69347,
+      "items_missing": 69347,
+      "modality": "text",
+      "normalized": false,
+      "notes": "text feature file not present. PixelRec publishes it as a ~8.6 GiB JSON object covering all 408,374 full-PixelRec items; it is not downloaded by default. Run `python scripts/download_pixelrec50k.py --with-features` to fetch it. Coverage is reported as 0.0, not assumed.",
+      "rows_in_source": 0,
+      "rows_matched": 0,
+      "rows_with_inf": 0,
+      "rows_with_nan": 0,
+      "source_bytes": null,
+      "source_path": "data/raw/pixelrec50k/text_feature.json"
+    },
+    {
+      "available": false,
+      "coverage": 0.0,
+      "dimension": null,
+      "dimension_mismatches": 0,
+      "dtype": "float32",
+      "duplicate_ids": 0,
+      "encoder": null,
+      "items_expected": 69347,
+      "items_missing": 69347,
+      "modality": "image",
+      "normalized": false,
+      "notes": "image feature file not present. PixelRec publishes it as a ~8.6 GiB JSON object covering all 408,374 full-PixelRec items; it is not downloaded by default. Run `python scripts/download_pixelrec50k.py --with-features` to fetch it. Coverage is reported as 0.0, not assumed.",
+      "rows_in_source": 0,
+      "rows_matched": 0,
+      "rows_with_inf": 0,
+      "rows_with_nan": 0,
+      "source_bytes": null,
+      "source_path": "data/raw/pixelrec50k/image_feature.json"
+    }
+  ],
+  "filtering": {
+    "after": {
+      "interactions": 975976,
+      "items": 69347,
+      "users": 50000
+    },
+    "before": {
+      "items_below_item_threshold": 13518,
+      "singleton_items": 13518,
+      "total_interactions": 989494,
+      "total_items": 82865,
+      "total_users": 50000,
+      "users_below_user_threshold": 0
+    },
+    "configuration": {
+      "iterative": true,
+      "min_item_interactions": 2,
+      "min_user_interactions": 3
+    },
+    "converged": true,
+    "enabled": true,
+    "iteration_count": 1,
+    "iterations": [
+      {
+        "interactions_remaining": 975976,
+        "interactions_removed": 13518,
+        "items_remaining": 69347,
+        "items_removed": 13518,
+        "iteration": 1,
+        "users_remaining": 50000,
+        "users_removed": 0
+      }
+    ],
+    "totals": {
+      "interactions_removed": 13518,
+      "items_removed": 13518,
+      "users_removed": 0
+    }
+  },
+  "history_length_distribution": {
+    "count": 50000,
+    "max": 416.0,
+    "mean": 19.51952,
+    "median": 14.0,
+    "min": 3.0,
+    "quantiles": {
+      "p1": 6.0,
+      "p25": 11.0,
+      "p5": 8.0,
+      "p50": 14.0,
+      "p75": 22.0,
+      "p90": 36.0,
+      "p95": 49.0,
+      "p99": 90.0
+    },
+    "std": 17.321117
+  },
+  "leakage": {
+    "checks": [
+      {
+        "check_id": "L01_no_duplicate_interaction_across_splits",
+        "description": "No interaction appears in more than one split.",
+        "detail": "0 interactions span multiple splits",
+        "evidence": {
+          "examples": []
+        },
+        "passed": true,
+        "severity": "critical"
+      },
+      {
+        "check_id": "L02_train_precedes_validation",
+        "description": "Every training interaction precedes the user's validation targets.",
+        "detail": "0 users have training events at or after a validation target",
+        "evidence": {
+          "examples": []
+        },
+        "passed": true,
+        "severity": "critical"
+      },
+      {
+        "check_id": "L03_validation_precedes_test",
+        "description": "Every validation interaction precedes the user's test targets.",
+        "detail": "0 users have validation events at or after a test target",
+        "evidence": {
+          "examples": []
+        },
+        "passed": true,
+        "severity": "critical"
+      },
+      {
+        "check_id": "L04_train_precedes_test",
+        "description": "Every training interaction precedes the user's test targets.",
+        "detail": "0 users have training events at or after a test target",
+        "evidence": {
+          "examples": []
+        },
+        "passed": true,
+        "severity": "critical"
+      },
+      {
+        "check_id": "L10_mapping_consistent_across_splits",
+        "description": "One mapping resolves every id in every split.",
+        "detail": "0 unmapped users, 0 unmapped items, 0 sentinel ids",
+        "evidence": {},
+        "passed": true,
+        "severity": "critical"
+      },
+      {
+        "check_id": "L11_cold_items_in_held_out",
+        "description": "Items appearing in held-out splits but never in training.",
+        "detail": "770 items are evaluated but never seen in training (genuine cold start)",
+        "evidence": {
+          "cold_item_count": 770,
+          "examples": [
+            "304",
+            "492",
+            "561",
+            "758",
+            "869"
+          ]
+        },
+        "passed": false,
+        "severity": "warning"
+      },
+      {
+        "check_id": "L05_train_sequence_history_is_past",
+        "description": "train sequence histories contain only events strictly before the target, and never the target itself.",
+        "detail": "0 sequences include a non-past event; 0 include the target in the input",
+        "evidence": {
+          "users_with_future_history": []
+        },
+        "passed": true,
+        "severity": "critical"
+      },
+      {
+        "check_id": "L05_validation_sequence_history_is_past",
+        "description": "validation sequence histories contain only events strictly before the target, and never the target itself.",
+        "detail": "0 sequences include a non-past event; 0 include the target in the input",
+        "evidence": {
+          "users_with_future_history": []
+        },
+        "passed": true,
+        "severity": "critical"
+      },
+      {
+        "check_id": "L05_test_sequence_history_is_past",
+        "description": "test sequence histories contain only events strictly before the target, and never the target itself.",
+        "detail": "0 sequences include a non-past event; 0 include the target in the input",
+        "evidence": {
+          "users_with_future_history": []
+        },
+        "passed": true,
+        "severity": "critical"
+      },
+      {
+        "check_id": "L07_graph_training_only",
+        "description": "Training graph edges come from training interactions only.",
+        "detail": "0 edges exist only in a held-out split",
+        "evidence": {
+          "examples": []
+        },
+        "passed": true,
+        "severity": "critical"
+      },
+      {
+        "check_id": "L08_popularity_training_only",
+        "description": "Item popularity counts equal a recount over training rows alone.",
+        "detail": "0 items have counts that do not match a training-only recount",
+        "evidence": {
+          "examples": []
+        },
+        "passed": true,
+        "severity": "critical"
+      },
+      {
+        "check_id": "L09_user_statistics_training_only",
+        "description": "User interaction counts equal a recount over training rows alone.",
+        "detail": "0 users have counts that do not match a training-only recount",
+        "evidence": {
+          "examples": []
+        },
+        "passed": true,
+        "severity": "critical"
+      },
+      {
+        "check_id": "L12_no_labels_in_feature_tables",
+        "description": "Feature tables carry no split label or target column.",
+        "detail": "0 feature tables contain forbidden columns",
+        "evidence": {
+          "offenders": {}
+        },
+        "passed": true,
+        "severity": "critical"
+      }
+    ],
+    "critical_failures": 0,
+    "passed": true,
+    "passed_checks": 12,
+    "total_checks": 13,
+    "warnings": 1
+  },
+  "removed": {
+    "interactions": 13518,
+    "items": 13518,
+    "users": 0
+  },
+  "sequences": [
+    {
+      "examples": 775977,
+      "max_length_configured": 100,
+      "mean_length": 18.031,
+      "min_length_configured": 2,
+      "skipped_short_history": 99999,
+      "split": "train",
+      "truncated": 13418,
+      "users": 49999
+    },
+    {
+      "examples": 49999,
+      "max_length_configured": 100,
+      "mean_length": 17.245,
+      "min_length_configured": 2,
+      "skipped_short_history": 1,
+      "split": "validation",
+      "truncated": 327,
+      "users": 49999
+    },
+    {
+      "examples": 50000,
+      "max_length_configured": 100,
+      "mean_length": 18.238,
+      "min_length_configured": 2,
+      "skipped_short_history": 0,
+      "split": "test",
+      "truncated": 337,
+      "users": 50000
+    }
+  ],
+  "slices": [
+    {
+      "description": "Users with 1-3 training interactions.",
+      "entity_type": "user",
+      "rule": "training_interaction_count >= 1 and <= 3",
+      "size": 25,
+      "slice_name": "users_activity_1-3"
+    },
+    {
+      "description": "Users with 4-10 training interactions.",
+      "entity_type": "user",
+      "rule": "training_interaction_count >= 4 and <= 10",
+      "size": 19901,
+      "slice_name": "users_activity_4-10"
+    },
+    {
+      "description": "Users with 11-30 training interactions.",
+      "entity_type": "user",
+      "rule": "training_interaction_count >= 11 and <= 30",
+      "size": 24028,
+      "slice_name": "users_activity_11-30"
+    },
+    {
+      "description": "Users with 31+ training interactions.",
+      "entity_type": "user",
+      "rule": "training_interaction_count >= 31",
+      "size": 6046,
+      "slice_name": "users_activity_31+"
+    },
+    {
+      "description": "Long-tail items.",
+      "entity_type": "item",
+      "rule": "items outside the head accounting for 80% of training interactions, ranked by training interaction count",
+      "size": 40778,
+      "slice_name": "items_long_tail"
+    },
+    {
+      "description": "Head (popular) items.",
+      "entity_type": "item",
+      "rule": "items outside the head accounting for 80% of training interactions, ranked by training interaction count",
+      "size": 27799,
+      "slice_name": "items_head"
+    },
+    {
+      "description": "Items appearing only in validation/test, never in training.",
+      "entity_type": "item",
+      "rule": "internal_item_id in held-out splits and not in train",
+      "size": 770,
+      "slice_name": "items_cold_start"
+    },
+    {
+      "description": "Users appearing only in validation/test. Empty under per-user leave-last-N by construction; not fabricated.",
+      "entity_type": "user",
+      "rule": "internal_user_id in held-out splits and not in train",
+      "size": 0,
+      "slice_name": "users_cold_start"
+    },
+    {
+      "description": "Items with no text feature vector.",
+      "entity_type": "item",
+      "rule": "membership in the aligned feature index tables",
+      "size": 69347,
+      "slice_name": "items_missing_text_features"
+    },
+    {
+      "description": "Items with no image feature vector.",
+      "entity_type": "item",
+      "rule": "membership in the aligned feature index tables",
+      "size": 69347,
+      "slice_name": "items_missing_image_features"
+    },
+    {
+      "description": "Items with neither text nor image feature vector.",
+      "entity_type": "item",
+      "rule": "membership in the aligned feature index tables",
+      "size": 69347,
+      "slice_name": "items_missing_both_modalities"
+    },
+    {
+      "description": "Items with both text and image feature vectors.",
+      "entity_type": "item",
+      "rule": "membership in the aligned feature index tables",
+      "size": 0,
+      "slice_name": "items_both_modalities"
+    }
+  ],
+  "sparsity": 0.999718524,
+  "split": {
+    "configuration_hash": "0c601865de162e1f31ff95ec5bed5d1bf24b97d8b1a1cc178ead254e761c56e4",
+    "created_at": "2026-08-23T22:40:32.300598+00:00",
+    "dataset_version": "v1",
+    "eligible_users": 50000,
+    "ineligible_users": 0,
+    "minimum_user_history": 3,
+    "ordering_field": "timestamp",
+    "random_seed": 42,
+    "split_strategy": "per_user_leave_last_n",
+    "split_version": "1",
+    "test_items": 20770,
+    "test_rows": 50000,
+    "test_users": 50000,
+    "train_items": 68577,
+    "train_rows": 875976,
+    "train_users": 50000,
+    "validation_items": 23760,
+    "validation_rows": 50000,
+    "validation_users": 50000
+  }
+}

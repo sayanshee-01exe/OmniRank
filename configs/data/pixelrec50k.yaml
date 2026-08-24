@@ -1,0 +1,106 @@
+# ---------------------------------------------------------------------------
+# Domain profile: PixelRec50K (short-video content recommendation).
+#
+# Source : https://github.com/westlake-repl/PixelRec
+# Folder : https://drive.google.com/drive/folders/1bQPgM-6yAnzcD0jKBoUUheA9LL5xnCHG
+# Licence: non-commercial research and educational use only. No redistribution.
+#          See docs/data/pixelrec50k_overview.md for the verbatim terms.
+#
+# Verified against the real files on 2026-08-24:
+#   interaction.csv  989,494 rows  50,000 users  82,865 items
+#   item_info.csv     82,865 rows
+#
+# Use with:  python scripts/prepare_data.py --config configs/data/pixelrec50k.yaml
+# ---------------------------------------------------------------------------
+data:
+  domain: short_video
+  dataset_name: pixelrec50k
+  # Bumped whenever the raw snapshot changes. `v1` is the 2023-09-26
+  # interaction.csv / 2024-11-18 item_info.csv pair, both checksummed in the
+  # dataset manifest.
+  dataset_version: v1
+
+  dataset:
+    raw_dir: data/raw/pixelrec50k
+    interim_dir: data/interim/pixelrec50k
+    processed_dir: data/processed/pixelrec50k
+    source_repository: https://github.com/westlake-repl/PixelRec
+    licence: >-
+      Westlake Representation Learning Lab - non-commercial research and
+      educational use only; no rights granted to copy, modify, publish,
+      distribute, or commercialise the dataset.
+
+  processing:
+    chunk_size: 100000
+    validate_checksums: true
+    overwrite: false
+    # null processes all 50,000 users. Set an integer for a development run;
+    # whole users are kept, never partial histories.
+    subset_users: null
+
+  # PixelRec records ONE undifferentiated implicit signal. It is named
+  # `interaction` rather than `click`, `view`, or `like` because the source
+  # never measured which of those it was. See docs/data/source_to_canonical_mapping.md.
+  event_types:
+    interaction: 1.0
+  positive_event_threshold: 1.0
+
+  interactions:
+    default_event_type: interaction
+    default_weight: 1.0
+
+  validation:
+    # Item prices do not exist in PixelRec; these bounds are inert here and are
+    # kept only because the shared schema declares them.
+    min_price: 0.0
+    max_price: 1000000.0
+    min_rating: 1.0
+    max_rating: 5.0
+    # The earliest genuine event in the file is 2012-02-03T18:15:31Z. The floor
+    # sits below it so real data is never rejected, but above epoch 0 so a
+    # sentinel timestamp is.
+    min_timestamp: "2010-01-01T00:00:00Z"
+    allow_future_timestamps: false
+    drop_duplicate_events: true
+
+  filtering:
+    enabled: true
+    # Every user already has >= 6 interactions, so the user threshold is inert
+    # on the full dataset. It still runs, because a subset run can produce
+    # users below it once singleton items are removed.
+    min_interactions_per_user: 3
+    # 13,518 items are singletons and are removed by this. Removing them makes
+    # the item threshold the binding constraint and forces the loop to iterate.
+    min_interactions_per_item: 2
+    iterative: true
+
+  splitting:
+    strategy: per_user_leave_last_n
+    validation_interactions: 1
+    test_interactions: 1
+    minimum_history_before_validation: 1
+
+  sequences:
+    max_length: 100
+    min_length: 2
+
+  features:
+    validate_text_features: true
+    validate_image_features: true
+    # PixelRec publishes raw encoder outputs and documents no normalisation.
+    normalize_precomputed_features: false
+    text_feature_file: text_feature.json
+    image_feature_file: image_feature.json
+    # Both published files are 1024-dimensional (measured by streaming the
+    # first record of each). Asserted per vector.
+    expected_dimension: 1024
+    # The source does not name the encoders that produced these vectors, so
+    # neither does this file. A guess here would end up in artifact metadata.
+    text_encoder: null
+    image_encoder: null
+
+  slices:
+    long_tail_quantile: 0.8
+
+  outputs:
+    format: parquet

@@ -1,0 +1,39 @@
+{
+  "after": {
+    "interactions": 975976,
+    "items": 69347,
+    "users": 50000
+  },
+  "before": {
+    "items_below_item_threshold": 13518,
+    "singleton_items": 13518,
+    "total_interactions": 989494,
+    "total_items": 82865,
+    "total_users": 50000,
+    "users_below_user_threshold": 0
+  },
+  "configuration": {
+    "iterative": true,
+    "min_item_interactions": 2,
+    "min_user_interactions": 3
+  },
+  "converged": true,
+  "enabled": true,
+  "iteration_count": 1,
+  "iterations": [
+    {
+      "interactions_remaining": 975976,
+      "interactions_removed": 13518,
+      "items_remaining": 69347,
+      "items_removed": 13518,
+      "iteration": 1,
+      "users_remaining": 50000,
+      "users_removed": 0
+    }
+  ],
+  "totals": {
+    "interactions_removed": 13518,
+    "items_removed": 13518,
+    "users_removed": 0
+  }
+}

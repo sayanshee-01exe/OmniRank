@@ -1,0 +1,144 @@
+{
+  "checks": [
+    {
+      "check_id": "L01_no_duplicate_interaction_across_splits",
+      "description": "No interaction appears in more than one split.",
+      "detail": "0 interactions span multiple splits",
+      "evidence": {
+        "examples": []
+      },
+      "passed": true,
+      "severity": "critical"
+    },
+    {
+      "check_id": "L02_train_precedes_validation",
+      "description": "Every training interaction precedes the user's validation targets.",
+      "detail": "0 users have training events at or after a validation target",
+      "evidence": {
+        "examples": []
+      },
+      "passed": true,
+      "severity": "critical"
+    },
+    {
+      "check_id": "L03_validation_precedes_test",
+      "description": "Every validation interaction precedes the user's test targets.",
+      "detail": "0 users have validation events at or after a test target",
+      "evidence": {
+        "examples": []
+      },
+      "passed": true,
+      "severity": "critical"
+    },
+    {
+      "check_id": "L04_train_precedes_test",
+      "description": "Every training interaction precedes the user's test targets.",
+      "detail": "0 users have training events at or after a test target",
+      "evidence": {
+        "examples": []
+      },
+      "passed": true,
+      "severity": "critical"
+    },
+    {
+      "check_id": "L10_mapping_consistent_across_splits",
+      "description": "One mapping resolves every id in every split.",
+      "detail": "0 unmapped users, 0 unmapped items, 0 sentinel ids",
+      "evidence": {},
+      "passed": true,
+      "severity": "critical"
+    },
+    {
+      "check_id": "L11_cold_items_in_held_out",
+      "description": "Items appearing in held-out splits but never in training.",
+      "detail": "770 items are evaluated but never seen in training (genuine cold start)",
+      "evidence": {
+        "cold_item_count": 770,
+        "examples": [
+          "304",
+          "492",
+          "561",
+          "758",
+          "869"
+        ]
+      },
+      "passed": false,
+      "severity": "warning"
+    },
+    {
+      "check_id": "L05_train_sequence_history_is_past",
+      "description": "train sequence histories contain only events strictly before the target, and never the target itself.",
+      "detail": "0 sequences include a non-past event; 0 include the target in the input",
+      "evidence": {
+        "users_with_future_history": []
+      },
+      "passed": true,
+      "severity": "critical"
+    },
+    {
+      "check_id": "L05_validation_sequence_history_is_past",
+      "description": "validation sequence histories contain only events strictly before the target, and never the target itself.",
+      "detail": "0 sequences include a non-past event; 0 include the target in the input",
+      "evidence": {
+        "users_with_future_history": []
+      },
+      "passed": true,
+      "severity": "critical"
+    },
+    {
+      "check_id": "L05_test_sequence_history_is_past",
+      "description": "test sequence histories contain only events strictly before the target, and never the target itself.",
+      "detail": "0 sequences include a non-past event; 0 include the target in the input",
+      "evidence": {
+        "users_with_future_history": []
+      },
+      "passed": true,
+      "severity": "critical"
+    },
+    {
+      "check_id": "L07_graph_training_only",
+      "description": "Training graph edges come from training interactions only.",
+      "detail": "0 edges exist only in a held-out split",
+      "evidence": {
+        "examples": []
+      },
+      "passed": true,
+      "severity": "critical"
+    },
+    {
+      "check_id": "L08_popularity_training_only",
+      "description": "Item popularity counts equal a recount over training rows alone.",
+      "detail": "0 items have counts that do not match a training-only recount",
+      "evidence": {
+        "examples": []
+      },
+      "passed": true,
+      "severity": "critical"
+    },
+    {
+      "check_id": "L09_user_statistics_training_only",
+      "description": "User interaction counts equal a recount over training rows alone.",
+      "detail": "0 users have counts that do not match a training-only recount",
+      "evidence": {
+        "examples": []
+      },
+      "passed": true,
+      "severity": "critical"
+    },
+    {
+      "check_id": "L12_no_labels_in_feature_tables",
+      "description": "Feature tables carry no split label or target column.",
+      "detail": "0 feature tables contain forbidden columns",
+      "evidence": {
+        "offenders": {}
+      },
+      "passed": true,
+      "severity": "critical"
+    }
+  ],
+  "critical_failures": 0,
+  "passed": true,
+  "passed_checks": 12,
+  "total_checks": 13,
+  "warnings": 1
+}

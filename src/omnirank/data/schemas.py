@@ -46,6 +46,11 @@ class EventType(StrEnum):
     feature code and evaluation can reason about intent across verticals.
     """
 
+    # Generic implicit feedback: the source records that a user engaged with an
+    # item, and nothing finer. Datasets like PixelRec provide exactly this, and
+    # calling it a "click" or a "purchase" would assert intent the source never
+    # measured. Kept first because it is the weakest possible claim.
+    INTERACTION = "interaction"
     VIEW = "view"
     CLICK = "click"
     WISHLIST = "wishlist"
@@ -80,14 +85,18 @@ class User(_Record):
     """
 
     user_id: IdStr
-    created_at: datetime
+    # Optional: many datasets expose no user table at all, only an interaction
+    # log from which users are derived. Inventing a signup date would be
+    # fabrication, and a fabricated date silently corrupts any recency feature
+    # built on it.
+    created_at: datetime | None = None
     # Free-form, domain-specific context (locale, segment, cohort, ...).
     attributes: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("created_at")
     @classmethod
-    def _created_at_utc(cls, value: datetime) -> datetime:
-        return _require_utc(value, "user.created_at")
+    def _created_at_utc(cls, value: datetime | None) -> datetime | None:
+        return None if value is None else _require_utc(value, "user.created_at")
 
 
 class Item(_Record):
@@ -99,7 +108,10 @@ class Item(_Record):
     """
 
     item_id: IdStr
-    title: str = Field(min_length=1, max_length=1024)
+    # Optional, but never empty when present: a catalogue with untitled rows is
+    # normal (0.23% of PixelRec items have none), while a whitespace-only title
+    # is a data error worth rejecting.
+    title: str | None = Field(default=None, min_length=1, max_length=1024)
     description: str | None = Field(default=None, max_length=20_000)
     category: str | None = Field(default=None, max_length=256)
     brand: str | None = Field(default=None, max_length=256)
@@ -110,13 +122,16 @@ class Item(_Record):
     # portable between a laptop and a cloud training host.
     image_id: str | None = Field(default=None, max_length=512)
     available: bool = True
-    created_at: datetime
+    # Optional for the same reason as `User.created_at`: catalogues frequently
+    # ship without a publication date, and a fabricated one would make an item
+    # look newer or older than it is to every freshness feature downstream.
+    created_at: datetime | None = None
     attributes: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("created_at")
     @classmethod
-    def _created_at_utc(cls, value: datetime) -> datetime:
-        return _require_utc(value, "item.created_at")
+    def _created_at_utc(cls, value: datetime | None) -> datetime | None:
+        return None if value is None else _require_utc(value, "item.created_at")
 
     @field_validator("price")
     @classmethod

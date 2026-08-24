@@ -1,88 +1,141 @@
 #!/usr/bin/env python
-"""Prepare a raw dataset for training.
+"""Prepare a dataset for OmniRank training.
 
-    python scripts/prepare_data.py --config-dir configs
+    python scripts/prepare_data.py --config configs/data/pixelrec50k.yaml
 
-**Phase 1 status: the pipeline this drives is not built.** What this script does
-today is real and useful on its own - it loads and validates the configuration,
-resolves and reports every path the pipeline will read and write, and confirms
-the domain profile is coherent - then exits non-zero rather than pretending to
-have produced a dataset.
+Runs the full pipeline: inspect, validate, profile, canonicalize, clean, filter,
+map ids, split, derive collaborative/graph/sequential/metadata/feature datasets,
+build evaluation slices, check leakage, write reports and the manifest.
 
-Planned steps (Phase 2), in order:
+Exit codes:
 
-1. Load raw records via ``omnirank.data.loaders.DatasetLoader``.
-2. Validate with ``omnirank.data.validation.validate_batch``.
-3. Clean, k-core filter, and build id mappings (``data.preprocessing``).
-4. Split temporally (``data.splitting``), then assert ``check_split_integrity``.
-5. Generate features and sequences (``omnirank.features``).
-6. Write to ``data/processed/`` and register the mappings as artifacts.
+===  =======================================================================
+0    success
+2    configuration error, or a source file is missing
+3    a pipeline stage failed (including a critical leakage check)
+===  =======================================================================
+
+Options that change what is produced are recorded in the dataset manifest, so a
+subset run can never be mistaken for a full one.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from omnirank.core.config import load_config
-from omnirank.core.exceptions import ConfigurationError
-from omnirank.core.logging import configure_logging, get_logger, run_context
+from omnirank.core.exceptions import ConfigurationError, DataError, OmniRankError
+from omnirank.core.logging import configure_logging, get_logger
+from omnirank.data.pipeline import PipelineOptions, run_pipeline
 
-NOT_IMPLEMENTED_EXIT = 3
+CONFIG_ERROR_EXIT = 2
+PIPELINE_ERROR_EXIT = 3
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Prepare a dataset for OmniRank training.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "examples:\n"
+            "  python scripts/prepare_data.py --config configs/data/pixelrec50k.yaml\n"
+            "  python scripts/prepare_data.py --config configs/data/pixelrec50k.yaml "
+            "--subset-users 500\n"
+            "  python scripts/prepare_data.py --config configs/data/pixelrec50k.yaml "
+            "--validate-only\n"
+        ),
+    )
+    parser.add_argument(
+        "--config",
+        default="configs/data/pixelrec50k.yaml",
+        help="Domain profile to use. Replaces the profile named in base.yaml.",
+    )
+    parser.add_argument("--config-dir", default="configs", help="Directory holding base.yaml.")
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Check that source files exist and have the expected schema, then stop.",
+    )
+    parser.add_argument(
+        "--profile-only",
+        action="store_true",
+        help="Profile the raw data and write its reports, then stop before cleaning.",
+    )
+    parser.add_argument(
+        "--subset-users",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Development run over the first N users (whole histories, deterministic).",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace existing processed outputs. Off by default.",
+    )
+    return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     """Entry point. Returns a process exit code."""
-    parser = argparse.ArgumentParser(description="Prepare a dataset for OmniRank training.")
-    parser.add_argument("--config-dir", default="configs")
-    parser.add_argument(
-        "--check-only",
-        action="store_true",
-        help="Validate configuration and report resolved paths, then exit 0.",
-    )
-    args = parser.parse_args(argv)
+    args = parse_args(argv)
+
+    config_dir = Path(args.config_dir)
+    profile = Path(args.config)
+    # Accept both `configs/data/x.yaml` and `data/x.yaml`.
+    if profile.is_absolute() or profile.exists():
+        # A path outside config_dir passes through unchanged.
+        with contextlib.suppress(ValueError):
+            profile = profile.resolve().relative_to(config_dir.resolve())
 
     try:
-        config = load_config(args.config_dir)
+        config = load_config(config_dir, data_profile=profile)
     except ConfigurationError as exc:
+        # Printed rather than logged: logging is configured from the config that
+        # just failed to load, and a stack trace would bury the actual problem.
         print(f"Configuration error: {exc}", file=sys.stderr)
-        return 2
+        return CONFIG_ERROR_EXIT
 
     configure_logging(config.logging, force=True)
     logger = get_logger("omnirank.prepare_data")
 
-    with run_context(stage="prepare_data") as run_id:
-        paths = config.paths.resolved(Path.cwd())
-        logger.info(
-            "prepare_data.configuration_ok",
-            run_id=run_id,
-            domain=config.data.domain,
-            dataset=f"{config.data.dataset_name}@{config.data.dataset_version}",
-            event_types=sorted(config.data.event_types),
-            positive_events=list(config.data.positive_event_types),
-            split_strategy=config.data.splitting.strategy,
-            raw_dir=str(paths["raw_dir"]),
-            processed_dir=str(paths["processed_dir"]),
-            mappings_dir=str(paths["mappings_dir"]),
-            training_config_hash=config.training_config_hash[:16],
-        )
+    options = PipelineOptions(
+        overwrite=args.overwrite,
+        validate_only=args.validate_only,
+        profile_only=args.profile_only,
+        subset_users=args.subset_users,
+    )
 
-        if args.check_only:
-            return 0
+    try:
+        result = run_pipeline(config, options)
+    except DataError as exc:
+        logger.error("prepare_data.pipeline_failed", reason=str(exc))
+        return PIPELINE_ERROR_EXIT
+    except OmniRankError as exc:
+        logger.error("prepare_data.failed", error_code=exc.code, reason=str(exc))
+        return CONFIG_ERROR_EXIT
 
-        logger.error(
-            "prepare_data.not_implemented",
-            run_id=run_id,
-            planned_phase=2,
-            detail=(
-                "The data pipeline is a Phase 2 deliverable. Configuration and paths "
-                "above are valid. Re-run with --check-only to exit successfully."
-            ),
-        )
-    return NOT_IMPLEMENTED_EXIT
+    if args.validate_only:
+        logger.info("prepare_data.validated", detail="source files present and well-formed")
+        return 0
+    if args.profile_only:
+        logger.info("prepare_data.profiled", **result.counts)
+        return 0
+
+    logger.info(
+        "prepare_data.completed",
+        manifest=str(result.manifest_path),
+        outputs=len(result.outputs),
+        leakage_passed=result.leakage_passed,
+        **result.counts,
+    )
+    return 0
 
 
 if __name__ == "__main__":

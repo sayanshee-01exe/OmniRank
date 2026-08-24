@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from omnirank.artifacts.metadata import ArtifactMetadata, ArtifactType, SupportedDevice
@@ -114,3 +115,75 @@ def interaction_row() -> dict[str, object]:
         "event_type": "click",
         "timestamp": "2026-02-01T10:00:00Z",
     }
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2: dataset pipeline fixtures
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def pixelrec_fixture_dir(tmp_path: Path) -> Path:
+    """A synthetic PixelRec-shaped raw directory."""
+    from tests.fixtures.pixelrec import write_fixture
+
+    raw = tmp_path / "raw" / "pixelrec50k"
+    write_fixture(raw)
+    return raw
+
+
+@pytest.fixture
+def pixelrec_config(config_dir: Path, tmp_path: Path, pixelrec_fixture_dir: Path) -> AppConfig:
+    """The real PixelRec profile, repointed at the synthetic fixture.
+
+    Filtering thresholds are relaxed relative to the shipped profile because the
+    fixture is tiny; the shipped thresholds would empty it, which is correct
+    behaviour but useless for testing the stages that follow.
+    """
+    from omnirank.core.config import ENV_PREFIX
+
+    return load_config(
+        config_dir,
+        data_profile="data/pixelrec50k.yaml",
+        env={
+            f"{ENV_PREFIX}DATA__DATASET__RAW_DIR": str(pixelrec_fixture_dir),
+            f"{ENV_PREFIX}DATA__DATASET__INTERIM_DIR": str(tmp_path / "interim"),
+            f"{ENV_PREFIX}DATA__DATASET__PROCESSED_DIR": str(tmp_path / "processed"),
+            f"{ENV_PREFIX}DATA__FILTERING__MIN_INTERACTIONS_PER_USER": "2",
+            f"{ENV_PREFIX}DATA__FILTERING__MIN_INTERACTIONS_PER_ITEM": "2",
+            f"{ENV_PREFIX}DATA__SEQUENCES__MAX_LENGTH": "10",
+        },
+        dotenv_path=config_dir / "__no_such_dotenv__",
+    )
+
+
+@pytest.fixture
+def split_frame() -> pd.DataFrame:
+    """A tiny hand-built split-labelled frame with known, checkable properties.
+
+    Three users: one with a full history, one with the bare minimum, one
+    ineligible. Written by hand rather than generated so every expected number
+    in the tests that use it can be verified by reading.
+    """
+    rows = [
+        # user 0: 5 events -> 3 train, 1 validation, 1 test
+        *[(0, item, order, "train") for item, order in [(10, 0), (11, 1), (12, 2)]],
+        (0, 13, 3, "validation"),
+        (0, 14, 4, "test"),
+        # user 1: 3 events -> 1 train, 1 validation, 1 test
+        (1, 10, 0, "train"),
+        (1, 15, 1, "validation"),
+        (1, 16, 2, "test"),
+        # user 2: 2 events -> ineligible, all training
+        (2, 10, 0, "train"),
+        (2, 11, 1, "train"),
+    ]
+    frame = pd.DataFrame(
+        rows, columns=["internal_user_id", "internal_item_id", "interaction_order", "split"]
+    )
+    frame["external_user_id"] = "u" + frame["internal_user_id"].astype(str)
+    frame["external_item_id"] = "i" + frame["internal_item_id"].astype(str)
+    frame["interaction_id"] = "e" + frame.index.astype(str)
+    frame["timestamp"] = 1_640_995_200 + frame["interaction_order"] * 3600
+    frame["event_type"] = "interaction"
+    frame["interaction_weight"] = 1.0
+    frame["source_row_id"] = frame.index
+    return frame

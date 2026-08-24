@@ -129,6 +129,21 @@ class TestProjectLayout:
             "docs/data/data_contracts.md",
             "docs/api/api_contracts.md",
             "docs/phase_reports/phase_01_report.md",
+            "docs/phase_reports/phase_02_report.md",
+            "configs/data/pixelrec50k.yaml",
+            "scripts/download_pixelrec50k.py",
+            "docs/data/pixelrec50k_overview.md",
+            "docs/data/pixelrec50k_raw_schema.md",
+            "docs/data/source_to_canonical_mapping.md",
+            "docs/data/cleaning_rules.md",
+            "docs/data/interaction_ordering.md",
+            "docs/data/filtering_policy.md",
+            "docs/data/temporal_splitting.md",
+            "docs/data/leakage_prevention.md",
+            "docs/data/processed_schemas.md",
+            "docs/data/multimodal_feature_alignment.md",
+            "docs/data/cold_start_evaluation.md",
+            "docs/data/data_versioning.md",
         ],
     )
     def test_required_file_exists(self, relative):
@@ -172,14 +187,33 @@ class TestScripts:
             check=False,
         )
 
-    def test_prepare_data_check_only_succeeds(self):
-        result = self._invoke("prepare_data.py", "--check-only")
-        assert result.returncode == 0
+    def test_prepare_data_validate_only_succeeds(self):
+        """Phase 2 replaced the placeholder: --validate-only checks real files."""
+        result = self._invoke(
+            "prepare_data.py", "--config", "configs/data/pixelrec50k.yaml", "--validate-only"
+        )
+        # 0 when the dataset is downloaded, 3 when it is not. Both are correct;
+        # what must never happen is a silent success without the source present.
+        assert result.returncode in (0, 3)
+        if result.returncode == 3:
+            assert "download_pixelrec50k" in result.stderr
 
-    def test_prepare_data_exits_nonzero_rather_than_claiming_success(self):
-        result = self._invoke("prepare_data.py")
-        assert result.returncode == 3
-        assert "not_implemented" in result.stderr
+    def test_prepare_data_rejects_an_unknown_config(self):
+        result = self._invoke("prepare_data.py", "--config", "data/nonexistent.yaml")
+        assert result.returncode == 2
+        assert "Configuration error" in result.stderr
+
+    def test_download_script_dry_run_downloads_nothing(self):
+        result = self._invoke("download_pixelrec50k.py", "--dry-run")
+        assert result.returncode == 0
+        assert "Dry run" in result.stdout
+        # The licence must be visible before anyone downloads anything.
+        assert "non-commercial" in result.stdout
+
+    def test_download_script_never_offers_the_full_dataset(self):
+        """Only the four PixelRec50K/feature ids are reachable from the script."""
+        source = (PROJECT_ROOT / "scripts" / "download_pixelrec50k.py").read_text()
+        assert source.count("RemoteFile(") == 4
 
     def test_train_rejects_an_unknown_model(self):
         assert self._invoke("train.py", "--model", "nonsense").returncode == 2
@@ -196,8 +230,11 @@ class TestScripts:
 
     def test_no_script_prints_a_metric(self):
         """Fabricated benchmark numbers are the one thing these must never emit."""
-        for script in ("prepare_data.py", "train.py", "evaluate.py"):
-            args = ("--model", "popularity") if script != "prepare_data.py" else ()
+        for script, args in (
+            ("prepare_data.py", ("--validate-only",)),
+            ("train.py", ("--model", "popularity")),
+            ("evaluate.py", ("--model", "popularity")),
+        ):
             output = self._invoke(script, *args)
             combined = (output.stdout + output.stderr).lower()
             for forbidden in ("ndcg@", "recall@0.", "precision@0."):

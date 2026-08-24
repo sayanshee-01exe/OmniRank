@@ -355,13 +355,20 @@ def validate_interactions(
 
 
 def _timestamp_in_bounds(
-    value: datetime,
+    value: datetime | None,
     config: DataConfig,
     now: datetime,
     report: ValidationReport,
     index: int,
 ) -> bool:
-    """Check a timestamp against the domain's window; record the issue if not."""
+    """Check a timestamp against the domain's window; record the issue if not.
+
+    ``None`` passes: ``User.created_at`` and ``Item.created_at`` are optional
+    because many datasets have no such field, and an absent value is a
+    documented gap rather than a bounds violation.
+    """
+    if value is None:
+        return True
     rules = config.validation
     if value < rules.min_timestamp:
         report.record(
