@@ -1,88 +1,254 @@
 #!/usr/bin/env python
-"""Train a recommendation model.
+"""Train and register an OmniRank baseline model.
 
-    python scripts/train.py --model popularity --config-dir configs
+    python scripts/train.py --model popularity \
+        --data-config configs/data/pixelrec50k.yaml \
+        --stage selection --version phase3-popularity-selection
 
-**Phase 1 status: no model is implemented.** This script validates its
-arguments against the configured generator registry - so ``--model lightgcn``
-correctly reports that LightGCN is a Phase 3 deliverable rather than failing with
-an import error - and then exits non-zero.
+    python scripts/train.py --model matrix_factorization \
+        --data-config configs/data/pixelrec50k.yaml \
+        --stage final --version phase3-mf-final
 
-Planned flow (Phase 2 onward): load the prepared dataset, construct the named
-model behind ``omnirank.models.base.CandidateGenerator``, fit, evaluate on the
-validation split, export the model plus any embeddings, and register the result
-with full :class:`~omnirank.artifacts.metadata.ArtifactMetadata`.
+Stages set the fit boundary, and getting it right is the whole discipline of
+this phase:
+
+===========  ==============================  ===================
+stage        fit splits                      evaluation target
+===========  ==============================  ===================
+selection    train                           validation
+final        train + validation              test
+===========  ==============================  ===================
+
+Hyperparameters come from the model's block in ``configs/models/retrieval.yaml``.
+CLI flags override **only** what is explicitly passed, so there is one source of
+truth and one documented way to deviate from it.
+
+Exit codes: 0 success · 2 configuration or data error · 3 training failure.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from omnirank.core.config import load_config
-from omnirank.core.exceptions import ConfigurationError
-from omnirank.core.logging import configure_logging, get_logger, run_context
+from typing import Any
 
-NOT_IMPLEMENTED_EXIT = 3
+from omnirank.artifacts.registry import ArtifactRegistry
+from omnirank.core.config import load_config
+from omnirank.core.exceptions import ConfigurationError, OmniRankError
+from omnirank.core.logging import configure_logging, get_logger, run_context
+from omnirank.data.processed import load_processed_dataset
+from omnirank.models.baselines.popularity import PopularityConfig
+from omnirank.models.baselines.registry_support import register_baseline
+from omnirank.models.baselines.runner import (
+    MATRIX_FACTORIZATION,
+    POPULARITY,
+    boundary_for_stage,
+    fit_bpr,
+    fit_popularity,
+    run_experiment,
+)
+
+CONFIG_ERROR_EXIT = 2
+TRAINING_ERROR_EXIT = 3
+
+MODELS = (POPULARITY, MATRIX_FACTORIZATION)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Train and register an OmniRank baseline.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument("--model", required=True, choices=MODELS)
+    parser.add_argument("--config-dir", default="configs")
+    parser.add_argument("--data-config", default="configs/data/pixelrec50k.yaml")
+    parser.add_argument(
+        "--stage",
+        default="selection",
+        choices=("selection", "final"),
+        help="selection fits train and scores validation; final fits train+validation.",
+    )
+    parser.add_argument("--version", required=True, help="Artifact version label.")
+    parser.add_argument("--seed", type=int, default=None, help="Override the configured seed.")
+    parser.add_argument(
+        "--device",
+        default="auto",
+        choices=("auto", "cpu", "mps"),
+        help="Compute device for BPR. Never selects CUDA.",
+    )
+    parser.add_argument("--overwrite", action="store_true", help="Replace an existing version.")
+    parser.add_argument(
+        "--no-register",
+        action="store_true",
+        help="Fit and evaluate without writing an artifact. For exploration.",
+    )
+    parser.add_argument(
+        "--skip-checksums",
+        action="store_true",
+        help="Skip dataset checksum verification (faster; less safe).",
+    )
+    # Explicit hyperparameter overrides. Absent flags fall back to YAML.
+    parser.add_argument("--variant", choices=("global_count", "time_decay"))
+    parser.add_argument("--half-life-days", type=float)
+    parser.add_argument("--embedding-dim", type=int)
+    parser.add_argument("--learning-rate", type=float)
+    parser.add_argument("--regularization", type=float)
+    parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--epochs", type=int)
+    parser.add_argument("--negatives-per-positive", type=int)
+    return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     """Entry point. Returns a process exit code."""
-    parser = argparse.ArgumentParser(description="Train an OmniRank model.")
-    parser.add_argument("--config-dir", default="configs")
-    parser.add_argument(
-        "--model",
-        required=True,
-        help="Model key from models.candidate_generators, or 'ranker'.",
-    )
-    parser.add_argument("--seed", type=int, default=None, help="Override the configured seed.")
-    args = parser.parse_args(argv)
+    args = parse_args(argv)
+    config_dir = Path(args.config_dir)
+    profile = Path(args.data_config)
+    # A path outside config_dir is passed through unchanged.
+    with contextlib.suppress(ValueError):
+        profile = profile.resolve().relative_to(config_dir.resolve())
 
     try:
-        config = load_config(args.config_dir)
+        config = load_config(config_dir, data_profile=profile)
     except ConfigurationError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
-        return 2
+        return CONFIG_ERROR_EXIT
 
     configure_logging(config.logging, force=True)
     logger = get_logger("omnirank.train")
+    seed = args.seed if args.seed is not None else config.seed
+    fit_splits, target_split = boundary_for_stage(args.stage)
+    dataset_config = config.data.dataset
+    if dataset_config is None:
+        print("The selected profile declares no data.dataset block.", file=sys.stderr)
+        return CONFIG_ERROR_EXIT
 
-    known = {**config.models.candidate_generators}
-    if args.model == "ranker":
-        phase = config.models.ranker.phase
-    elif args.model in known:
-        phase = known[args.model].phase
-    else:
-        print(
-            f"Unknown model {args.model!r}. Known: {sorted([*known, 'ranker'])}",
-            file=sys.stderr,
+    with run_context(stage="train", model=args.model, version=args.version) as run_id:
+        try:
+            dataset = load_processed_dataset(
+                Path(dataset_config.processed_dir),
+                Path(config.paths.mappings_dir) / config.data.dataset_name,
+                verify_checksums=not args.skip_checksums,
+            )
+        except OmniRankError as exc:
+            logger.error("train.dataset_unavailable", run_id=run_id, reason=str(exc))
+            return CONFIG_ERROR_EXIT
+
+        declared = config.models.candidate_generators[args.model].model_dump()
+        # Both branches assign a different concrete type; the registry and the
+        # runner accept either through their protocol surfaces.
+        model: Any
+        model_config: Any
+        try:
+            if args.model == POPULARITY:
+                model_config = PopularityConfig(
+                    variant=args.variant or declared.get("variant", "time_decay"),
+                    half_life_days=(
+                        args.half_life_days
+                        if args.half_life_days is not None
+                        else float(declared.get("half_life_days", 365.0))
+                    ),
+                )
+                model, fit_measurement = fit_popularity(dataset, fit_splits, model_config)
+                configuration = model_config.to_dict()
+                device = "cpu"
+            else:
+                from omnirank.models.baselines.bpr import BPRConfig
+
+                model_config = BPRConfig(
+                    embedding_dim=args.embedding_dim or int(declared.get("embedding_dim", 64)),
+                    learning_rate=(
+                        args.learning_rate
+                        if args.learning_rate is not None
+                        else float(declared.get("learning_rate", 0.005))
+                    ),
+                    regularization=(
+                        args.regularization
+                        if args.regularization is not None
+                        else float(declared.get("regularization", 1e-4))
+                    ),
+                    batch_size=args.batch_size or int(declared.get("batch_size", 4096)),
+                    epochs=args.epochs or int(declared.get("epochs", 20)),
+                    negatives_per_positive=(
+                        args.negatives_per_positive
+                        or int(declared.get("negatives_per_positive", 1))
+                    ),
+                    evaluation_user_batch_size=int(declared.get("evaluation_user_batch_size", 512)),
+                    seed=seed,
+                )
+                model, fit_measurement = fit_bpr(
+                    dataset, fit_splits, model_config, device=args.device
+                )
+                configuration = model_config.to_dict()
+                device = model.device
+        except OmniRankError as exc:
+            logger.error("train.fit_failed", run_id=run_id, reason=str(exc))
+            return TRAINING_ERROR_EXIT
+
+        result = run_experiment(
+            model,
+            dataset,
+            config,
+            model_name=args.model,
+            model_version=args.version,
+            fit_splits=fit_splits,
+            target_split=target_split,
+            fit_measurement=fit_measurement,
+            configuration=configuration,
         )
-        return 2
 
-    with run_context(stage="train", model=args.model) as run_id:
+        if not args.no_register:
+            artifact_dir = (
+                Path(config.paths.models_dir) / config.data.dataset_name / args.model / args.version
+            )
+            model.save(artifact_dir)
+            registry = ArtifactRegistry(
+                Path(config.paths.metadata_dir), artifact_root=Path(config.paths.artifact_root)
+            )
+            try:
+                register_baseline(
+                    registry,
+                    model_name=args.model,
+                    model_version=args.version,
+                    artifact_dir=artifact_dir,
+                    dataset_identity=dataset.identity.to_dict(),
+                    configuration_hash=config.training_config_hash,
+                    random_seed=seed,
+                    device=device,
+                    metrics={
+                        key: value
+                        for key, value in result.strict.flat().items()
+                        if key in ("recall@20", "ndcg@20", "coverage@20")
+                    },
+                    fit_splits=fit_splits,
+                    evaluation_protocol="full_catalogue",
+                    mapping_checksum=dataset.mapping_metadata.get("item_mapping_checksum", ""),
+                    extra_notes=f"stage={args.stage}",
+                    overwrite=args.overwrite,
+                )
+            except OmniRankError as exc:
+                logger.error("train.registration_failed", run_id=run_id, reason=str(exc))
+                return TRAINING_ERROR_EXIT
+
+        flat = result.strict.flat()
         logger.info(
-            "train.configuration_ok",
+            "train.completed",
             run_id=run_id,
             model=args.model,
-            planned_phase=phase,
-            seed=args.seed if args.seed is not None else config.seed,
-            device=config.device.preferred.value,
-            training_config_hash=config.training_config_hash[:16],
+            version=args.version,
+            stage=args.stage,
+            fit_splits="+".join(fit_splits),
+            target_split=target_split,
+            **{key: round(flat[key], 6) for key in ("recall@20", "ndcg@20") if key in flat},
         )
-        logger.error(
-            "train.not_implemented",
-            run_id=run_id,
-            model=args.model,
-            planned_phase=phase,
-            detail=(
-                f"{args.model!r} is a Phase {phase} deliverable. Phase 1 defines the "
-                "CandidateGenerator/Ranker interfaces but implements no model."
-            ),
-        )
-    return NOT_IMPLEMENTED_EXIT
+    return 0
 
 
 if __name__ == "__main__":

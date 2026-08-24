@@ -15,14 +15,14 @@ boundaries.
 | 5 | Temporal splitting | `data.splitting` | `Splitter`, `check_split_integrity` | 📋 P2 / ✅ checker |
 | 6 | Feature generation | `features.base` | `FeatureStore` | 📋 P2 |
 | 7 | Sequence generation | `features.base` | `SequenceBuilder` | 📋 P2 |
-| 8 | Model training | `models.base` | `CandidateGenerator`, `Ranker` | 📋 interfaces |
-| 9 | Model evaluation | `evaluation.base` | `Evaluator`, `GroundTruth` | 📋 P2 |
-| 10 | Candidate generation | `models.base` | `CandidateGenerator` | 📋 interface |
-| 11 | Candidate aggregation | `retrieval.base` | `CandidateAggregator` | 📋 P3 |
-| 12 | Ranking | `models.base`, `ranking.base` | `Ranker`, `FeatureBuilder` | 📋 P5 |
-| 13 | Post-ranking | `reranking.base` | `PostRankingFilter`, `Reranker` | 📋 P5 |
+| 8 | Model training | `models.baselines` | `CandidateGenerator`, `Ranker` | ✅ P3 (popularity, BPR) |
+| 9 | Model evaluation | `evaluation.*` | `Evaluator`, `GroundTruth`, `OfflineEvaluator` | ✅ P3 |
+| 10 | Candidate generation | `models.baselines` | `CandidateGenerator` | ✅ P3 (popularity, BPR) |
+| 11 | Candidate aggregation | `retrieval.base` | `CandidateAggregator` | 📋 P4 |
+| 12 | Ranking | `models.base`, `ranking.base` | `Ranker`, `FeatureBuilder` | 📋 P6 |
+| 13 | Post-ranking | `reranking.base` | `PostRankingFilter`, `Reranker` | 📋 P6 |
 | 14 | Artifact management | `artifacts` | `ArtifactMetadata`, `ArtifactRegistry` | ✅ |
-| 15 | Vector-index management | `retrieval.base` | `VectorIndex` | 📋 P3 |
+| 15 | Vector-index management | `retrieval.base` | `VectorIndex` | 📋 P4 |
 | 16 | Recommendation serving | `api` | FastAPI app | ✅ skeleton |
 | 17 | Interaction ingestion | `api.routes.interactions`, `database.base` | `InteractionRepository` | 📋 P2 |
 | 18 | Caching | `cache.base` | `CacheBackend`, `CacheKey` | 📋 P2 |

@@ -2,13 +2,14 @@
 
 A production-oriented, multi-stage, multimodal recommendation system.
 
-> **Status: Phase 2 (data engineering) complete.**
-> The repository contains the Phase 1 foundation plus a complete, reproducible,
-> leakage-checked data pipeline that has been run end to end on the **full real
-> PixelRec50K dataset** (989,494 interactions, 50,000 users, 82,865 items).
-> **No recommendation model has been trained or implemented yet.** Endpoints that
-> would need one return HTTP 501 naming the phase that will deliver them, and no
-> benchmark number appears anywhere in this repository.
+> **Status: Phase 3 (offline evaluation and baselines) complete.**
+> The repository contains the Phase 1 foundation, the Phase 2 data pipeline, and
+> a full offline evaluation framework with two trained baselines — time-decayed
+> popularity and BPR matrix factorization — measured on the **real PixelRec50K
+> dataset** under a full-catalogue protocol.
+> **No neural retrieval, ranking, or serving model exists.** Recommendation
+> endpoints still return HTTP 501, and every reported number comes from a real
+> run recorded in `reports/metrics/phase_03/`.
 
 ---
 
@@ -50,23 +51,23 @@ User and item data
         │
         ▼
 Candidate generation
-├── Popularity fallback              (Phase 2)
-├── Matrix factorization baseline    (Phase 2)
-├── LightGCN collaborative retrieval (Phase 3)
-├── Multimodal two-tower retrieval   (Phase 4)
-└── SASRec sequential retrieval      (Phase 3)
+├── Popularity fallback              ✅ Phase 3
+├── Matrix factorization baseline    ✅ Phase 3
+├── LightGCN collaborative retrieval (Phase 4)
+├── Multimodal two-tower retrieval   (Phase 5)
+└── SASRec sequential retrieval      (Phase 4)
         │
         ▼
-Candidate aggregation and deduplication   (Phase 3)
+Candidate aggregation and deduplication   (Phase 4)
         │
         ▼
-Ranking-feature generation                (Phase 5)
+Ranking-feature generation                (Phase 6)
         │
         ▼
-LightGBM ranker                           (Phase 5)
+LightGBM ranker                           (Phase 6)
         │
         ▼
-MMR diversity-aware reranking             (Phase 5)
+MMR diversity-aware reranking             (Phase 6)
         │
         ▼
 Final Top-K recommendations
@@ -106,7 +107,11 @@ Detailed diagrams: [`docs/architecture/system_architecture.md`](docs/architectur
 | API: `/health`, `/ready`, `/v1/models` | ✅ Implemented | `src/omnirank/api/routes/` |
 | API: all other endpoints | 📋 Contract only → **501** | `src/omnirank/api/schemas/` |
 | Metrics emission seam (logging sink) | ✅ Implemented | `src/omnirank/monitoring/` |
-| Candidate generators, ranker, reranker | 📋 Interface only | `src/omnirank/models/base.py` |
+| **Offline evaluation framework** | ✅ Implemented | `src/omnirank/evaluation/` |
+| **Popularity baseline (global + time-decay)** | ✅ Implemented | `src/omnirank/models/baselines/popularity.py` |
+| **BPR matrix factorization** | ✅ Implemented | `src/omnirank/models/baselines/bpr.py` |
+| **Negative sampling** | ✅ Implemented | `src/omnirank/models/baselines/negative_sampling.py` |
+| LightGCN, SASRec, two-tower, ranker, reranker | 📋 Interface only | `src/omnirank/models/base.py` |
 | Vector index (FAISS) | 📋 Interface only | `src/omnirank/retrieval/base.py` |
 | Database and cache clients | 📋 Protocol only | `src/omnirank/{database,cache}/` |
 | Prometheus / Grafana, Kubernetes, streaming | ❌ Deferred | — |
@@ -115,18 +120,18 @@ Detailed diagrams: [`docs/architecture/system_architecture.md`](docs/architectur
 
 ## Planned recommendation models
 
-None of these are implemented. They are listed with the phase that delivers them
+Popularity and BPR are implemented (Phase 3). The rest are listed with the phase that delivers them
 and the baseline each must beat ([ADR-007](docs/adr/ADR-007-baselines-before-advanced-models.md)).
 
 | Model | Kind | Phase | Must beat |
 |---|---|---|---|
-| Time-decayed popularity | non-personalised | 2 | — (it is the floor) |
-| Implicit matrix factorization | collaborative | 2 | popularity |
-| LightGCN | graph collaborative | 3 | matrix factorization |
-| SASRec | sequential | 3 | matrix factorization |
-| Two-tower multimodal | content + collaborative | 4 | LightGCN on cold items |
-| LightGBM LambdaRank | learning-to-rank | 5 | best single retriever |
-| MMR | diversity reranking | 5 | ranker, on diversity at equal NDCG |
+| Time-decayed popularity | non-personalised | 3 | — (it is the floor) |
+| BPR matrix factorization | collaborative | 3 | popularity |
+| LightGCN | graph collaborative | 4 | matrix factorization |
+| SASRec | sequential | 4 | matrix factorization |
+| Two-tower multimodal | content + collaborative | 5 | LightGCN on cold items |
+| LightGBM LambdaRank | learning-to-rank | 6 | best single retriever |
+| MMR | diversity reranking | 6 | ranker, on diversity at equal NDCG |
 
 ## Repository structure
 
@@ -292,6 +297,60 @@ reports/data_quality/pixelrec50k/ raw/ processed/ leakage/ filtering/
 
 Full schemas: [`docs/data/processed_schemas.md`](docs/data/processed_schemas.md).
 
+## Baselines and offline evaluation
+
+```bash
+make install-baseline     # adds PyTorch (the only extra Phase 3 needs)
+make compare-baselines    # selection -> lock -> final -> reports
+```
+
+Or step by step:
+
+```bash
+python scripts/train.py --model popularity \
+    --data-config configs/data/pixelrec50k.yaml \
+    --stage selection --version phase3-popularity-selection
+
+python scripts/evaluate.py --model popularity \
+    --version phase3-popularity-selection --split validation --protocol full
+
+python scripts/compare_baselines.py --stage selection   # search on validation
+python scripts/compare_baselines.py --stage final       # lock, refit, test once
+```
+
+### Protocol
+
+**Full-catalogue** evaluation is the only protocol used for reported numbers:
+every item the model can legitimately recommend is scored, seen items are
+excluded, and the top *K* is taken. Sampled-negative evaluation exists for
+development speed and is never used for a result.
+
+Users who receive no recommendations **score zero** and stay in the denominator.
+
+### Two views, always together
+
+| View | Population | Answers |
+|---|---|---|
+| **strict** | every held-out user | end-to-end performance; a cold target is a miss |
+| **warm** | users whose target is in the fit catalogue | collaborative ranking quality |
+
+On PixelRec50K, **98.24%** of validation targets and **98.55%** of test targets
+are reachable — the remainder are genuine new-item cold start and bound what any
+purely collaborative model can achieve.
+
+### Validation and test discipline
+
+```text
+selection   fit: train              targets: validation
+final       fit: train+validation   targets: test        (read once)
+```
+
+Hyperparameters are chosen on validation, written to
+`reports/metrics/phase_03/selected_configuration.json`, and only then is test
+touched — `compare_baselines.py --stage final` refuses to run without that file.
+
+Details: [`docs/evaluation/`](docs/evaluation/) and [`docs/models/`](docs/models/).
+
 ## Testing
 
 ```bash
@@ -308,16 +367,15 @@ Tests require no GPU, no network, no database, and no downloaded model weights.
 
 | Phase | Scope | Status |
 |---|---|---|
-| **1** | Foundation: structure, config, contracts, artifact registry, API skeleton, docs, tests | ✅ **Complete** |
-| **2** | Data pipeline on PixelRec50K: loaders, cleaning, filtering, ordered splitting, leakage validation, collaborative/graph/sequential datasets, feature alignment, slices, manifest | ✅ **Complete** |
-| **3** | Baselines + offline evaluation metrics: popularity, matrix factorization, recall/NDCG/MAP, per-slice reporting | Next |
-| **4** | Collaborative and sequential retrieval: LightGCN, SASRec, FAISS index, candidate aggregation | Planned |
-| **5** | Multimodal: PixelRec's published 1024-d vectors, two-tower retrieval | Planned |
-| **6** | Ranking and serving: feature builder, LightGBM ranker, MMR reranking, serving pipeline, fallback chain, hot reload | Planned |
-| **7** | Operations: Prometheus + Grafana, online evaluation, A/B framework | Planned |
-| **8+** | Explicitly out of scope for now: Kubernetes, real-time streaming, online learning, reinforcement learning | Deferred |
+| **1** | Architecture and foundation: structure, config, contracts, artifact registry, API skeleton, docs, tests | ✅ **Complete** |
+| **2** | PixelRec50K data engineering: loaders, cleaning, filtering, ordered splitting, leakage validation, collaborative/graph/sequential datasets, feature alignment, slices, manifest | ✅ **Complete** |
+| **3** | Offline evaluation, popularity and matrix-factorization baselines | ✅ **Complete** |
+| **4** | LightGCN, SASRec and candidate aggregation | Next |
+| **5** | Multimodal two-tower retrieval | Planned |
+| **6** | Learning-to-rank, MMR and online serving | Planned |
+| **7** | Monitoring and online experimentation | Planned |
 
-Phase reports: [Phase 1](docs/phase_reports/phase_01_report.md) · [Phase 2](docs/phase_reports/phase_02_report.md).
+Phase reports: [Phase 1](docs/phase_reports/phase_01_report.md) · [Phase 2](docs/phase_reports/phase_02_report.md) · [Phase 3](docs/phase_reports/phase_03_report.md).
 
 ## Architectural decisions
 

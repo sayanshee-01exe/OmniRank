@@ -40,7 +40,7 @@ stages between them are contracts. The table below marks each.
 |---|---|
 | **Component** | 1 — Data ingestion |
 | **Contract** | `omnirank.data.loaders.DatasetLoader` |
-| **Status** | 📋 Contract only (Phase 2) |
+| **Status** | ✅ Implemented (Phase 2) |
 
 A loader turns one source format into `DatasetBundle(users, items, interactions,
 provenance)`. It does not clean, filter, deduplicate, or reject — that is the
@@ -127,7 +127,7 @@ the method.
 |---|---|
 | **Component** | 8 — Model training |
 | **Contract** | `omnirank.models.base.CandidateGenerator` · `Ranker` |
-| **Status** | 📋 Interfaces only |
+| **Status** | ✅ Popularity + BPR implemented (Phase 3); LightGCN/SASRec Phase 4 |
 
 Training is model-specific; the *contract* is not. Every generator implements
 `fit` / `recommend` / `score` / `save` / `load`, which is what lets the aggregator
@@ -143,7 +143,7 @@ against its predecessor.
 |---|---|
 | **Component** | 9 — Model evaluation |
 | **Contract** | `omnirank.evaluation.Evaluator` · `GroundTruth` |
-| **Status** | 📋 Contract only (Phase 2) |
+| **Status** | ✅ Implemented (Phase 2) |
 
 An evaluator receives already-made recommendations and never calls a model, so
 the same evaluator scores a popularity baseline and a full pipeline, and no

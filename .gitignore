@@ -43,6 +43,11 @@ artifacts/mappings/*
 mlruns/
 reports/figures/*
 reports/metrics/*
+# Data-quality reports contain per-user and per-item tables derived from the
+# dataset (real external ids plus counts). The PixelRec licence grants no
+# redistribution rights, so derived per-entity tables stay out of git; the
+# small aggregate JSON/MD summaries are kept because they carry no per-entity rows.
+reports/data_quality/**/*.csv
 !reports/**/.gitkeep
 
 # --- Notebooks ---

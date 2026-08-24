@@ -1,0 +1,28 @@
+{
+  "artifact_path": "artifacts/models/pixelrec50k/popularity/phase3-popularity-selection",
+  "configuration_hash": "abd04e08fc0b5c07995ce57a9ec8dc38967f23e6f7c5fc6f9565f709bf8179a6",
+  "created_at": "2026-08-24T08:43:31.231952Z",
+  "feature_version": "phase3-raw-interactions",
+  "format_version": 1,
+  "framework_version": {
+    "torch": "2.13.0"
+  },
+  "git_commit": "7a56d4039f18271a74f890b0e02f9e3436639613",
+  "id_mapping_fingerprints": {
+    "item": "235fcff3343a651150e8f220bfebc9bdb986e78ab47b80c3d025a8259048bc3c"
+  },
+  "metrics": {
+    "coverage@20": 0.00035,
+    "ndcg@20": 0.0021493976863561147,
+    "recall@20": 0.00558
+  },
+  "model_name": "popularity",
+  "model_type": "retrieval_model",
+  "model_version": "phase3-popularity-selection",
+  "notes": "stage=selection | fit_splits=train | protocol=full_catalogue | trained_on_device=cpu | artifact_sha256=400cac6c5b2a29b382980709f29c609cd566e936467245f25d50f1e2270d0671 | item_mapping_checksum=235fcff3343a651150e8f220bfebc9bdb986e78ab47b80c3d025a8259048bc3c | split_version=1 | mapping_version=1 | dataset_manifest=9d1eabb7977d24ac | python=3.11.15",
+  "python_version": "3.11.15",
+  "random_seed": 42,
+  "required_index_version": 1,
+  "supported_device": "any",
+  "training_data_version": "pixelrec50k@v1"
+}

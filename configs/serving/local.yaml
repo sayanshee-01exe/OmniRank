@@ -17,7 +17,7 @@ serving:
   default_top_k: 20
   max_top_k: 200
   # Wall-clock budget for the whole pipeline. Exceeding it triggers fallback
-  # rather than a slow response. Enforced from Phase 2.
+  # rather than a slow response. Enforced once serving is built (Phase 6).
   latency_budget_ms: 300
   # Serve only items marked available; enforced in post-ranking (component 13).
   filter_unavailable: true

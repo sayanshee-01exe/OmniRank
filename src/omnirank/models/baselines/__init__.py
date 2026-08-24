@@ -1,27 +1,36 @@
-"""Non-neural baselines: popularity and matrix factorization.
+"""Non-neural baselines: popularity and BPR matrix factorization.
 
-PHASE: 2 - NOT IMPLEMENTED.
+Phase 3. Both implement :class:`~omnirank.models.base.CandidateGenerator`.
 
-This package is reserved, not written. It contains no model code, and nothing
-imports from it. It exists so the contract below is recorded next to where the
-implementation will live rather than only in a planning document.
-
-Planned contents
-----------------
-- `popularity.py` - time-decayed global and per-category popularity. Doubles
-  as the terminal stage of the serving fallback chain, so it is the one model
-  that must never be unavailable.
-- `matrix_factorization.py` - implicit-feedback ALS/BPR over the user-item
-  matrix. The reference number every later retrieval model must beat (ADR-007).
-
-Contract it must satisfy
-------------------------
-:class:`omnirank.models.base.CandidateGenerator`, unchanged. If implementing this model turns
-out to require widening that interface, the interface change is reviewed on its
-own - a model-specific escape hatch in the base class is how a multi-stage
-pipeline degenerates into five bespoke pipelines (ADR-001).
+``popularity`` needs only the ``data`` extra - it is the terminal stage of the
+serving fallback chain and must work when nothing else does. ``bpr`` needs the
+``baseline`` extra (torch) and is therefore **not** imported here; import it
+directly so that a torch-free environment can still use popularity and the
+evaluator.
 """
 
 from __future__ import annotations
 
-__all__: list[str] = []
+from omnirank.models.baselines.negative_sampling import (
+    UniformNegativeSampler,
+    build_positives_by_user,
+)
+from omnirank.models.baselines.popularity import (
+    GLOBAL_COUNT,
+    TIME_DECAY,
+    PopularityConfig,
+    PopularityFitData,
+    PopularityRecommender,
+    build_seen_by_user,
+)
+
+__all__ = [
+    "GLOBAL_COUNT",
+    "TIME_DECAY",
+    "PopularityConfig",
+    "PopularityFitData",
+    "PopularityRecommender",
+    "UniformNegativeSampler",
+    "build_positives_by_user",
+    "build_seen_by_user",
+]

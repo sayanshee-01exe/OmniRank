@@ -2,7 +2,11 @@
 
 ## Status
 
-Accepted — 2026-08-24.
+Accepted — 2026-08-24. **Vindicated in Phase 3**: under a full-catalogue
+protocol on PixelRec50K, time-decayed popularity outranks a tuned BPR matrix
+factorization on NDCG@20. Had the baseline been skipped, the BPR number would
+have been reported as a result with nothing to judge it against. See
+[`../phase_reports/phase_03_report.md`](../phase_reports/phase_03_report.md).
 
 ## Context
 
@@ -32,13 +36,13 @@ protocol before the next begins.**
 
 | Order | Model | Phase | Must beat |
 |---|---|---|---|
-| 1 | Time-decayed popularity | 2 | — (it is the floor) |
-| 2 | Implicit matrix factorization | 2 | popularity |
-| 3 | LightGCN | 3 | matrix factorization |
-| 4 | SASRec | 3 | matrix factorization |
-| 5 | Two-tower multimodal | 4 | LightGCN, on cold items specifically |
-| 6 | LightGBM ranker | 5 | best single retriever |
-| 7 | MMR reranking | 5 | ranker, on diversity at equal NDCG |
+| 1 | Time-decayed popularity | 3 | — (it is the floor) |
+| 2 | BPR matrix factorization | 3 | popularity |
+| 3 | LightGCN | 4 | matrix factorization |
+| 4 | SASRec | 4 | matrix factorization |
+| 5 | Two-tower multimodal | 5 | LightGCN, on cold items specifically |
+| 6 | LightGBM ranker | 6 | best single retriever |
+| 7 | MMR reranking | 6 | ranker, on diversity at equal NDCG |
 
 Supporting rules:
 
@@ -78,7 +82,7 @@ possible early result, and it is worth far more than the week it saves to skip.
 
 **Positive.** Every claim is comparative and reproducible. The fallback chain
 gets its terminal stage first, so the serving path can degrade safely from
-Phase 2. Cheap models arrive early, so the end-to-end pipeline is exercised
+Phase 3. Cheap models arrive early, so the end-to-end pipeline is exercised
 before the expensive parts exist. The evaluation harness is validated against a
 model whose behaviour is easy to reason about.
 

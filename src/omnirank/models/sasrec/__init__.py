@@ -1,6 +1,6 @@
 """SASRec self-attentive sequential retrieval.
 
-PHASE: 3 - NOT IMPLEMENTED.
+PHASE: 4 - NOT IMPLEMENTED.
 
 This package is reserved, not written. It contains no model code, and nothing
 imports from it. It exists so the contract below is recorded next to where the

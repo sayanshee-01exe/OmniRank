@@ -6,8 +6,10 @@ PIP     := uv pip
 VENV    := .venv
 
 .DEFAULT_GOAL := help
-.PHONY: help setup install lint format typecheck test test-unit test-integration check \
-        serve up down clean download-data prepare-data validate-data profile-data
+.PHONY: help setup install install-baseline lint format typecheck test test-unit \
+        test-integration test-baseline check serve up down clean download-data \
+        prepare-data validate-data profile-data train-popularity train-mf \
+        evaluate-popularity evaluate-mf compare-baselines
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -23,6 +25,9 @@ setup: $(VENV)  ## Create the venv, install the project with dev extras, seed .e
 
 install:  ## Reinstall the project (after dependency changes)
 	$(PIP) install -e ".[dev]"
+
+install-baseline:  ## Install the baseline modelling extra (adds PyTorch)
+	$(PIP) install -e ".[baseline,dev]"
 
 lint:  ## Ruff check
 	$(PYTHON) -m ruff check src tests scripts
@@ -43,6 +48,10 @@ test-unit:  ## Unit tests only
 test-integration:  ## Integration tests only
 	$(PYTHON) -m pytest tests/integration -m integration
 
+test-baseline:  ## Evaluation + baseline model tests (needs the baseline extra)
+	$(PYTHON) -m pytest tests/unit/evaluation tests/unit/models \
+	    tests/integration/test_baseline_pipeline.py
+
 check: lint typecheck test  ## Lint + typecheck + test (what CI runs)
 
 download-data:  ## Download PixelRec50K (51 MB; --with-features adds 17.3 GB)
@@ -56,6 +65,28 @@ validate-data:  ## Check the raw source files exist and match the expected schem
 
 profile-data:  ## Profile the raw dataset only, then stop
 	$(PYTHON) scripts/prepare_data.py --config configs/data/pixelrec50k.yaml --profile-only
+
+train-popularity:  ## Fit + register the popularity baseline (selection stage)
+	$(PYTHON) scripts/train.py --model popularity \
+	    --data-config configs/data/pixelrec50k.yaml \
+	    --stage selection --version phase3-popularity-selection
+
+train-mf:  ## Fit + register the BPR baseline (selection stage)
+	$(PYTHON) scripts/train.py --model matrix_factorization \
+	    --data-config configs/data/pixelrec50k.yaml \
+	    --stage selection --version phase3-mf-selection
+
+evaluate-popularity:  ## Evaluate the registered popularity model on validation
+	$(PYTHON) scripts/evaluate.py --model popularity \
+	    --version phase3-popularity-selection --split validation --protocol full
+
+evaluate-mf:  ## Evaluate the registered BPR model on validation
+	$(PYTHON) scripts/evaluate.py --model matrix_factorization \
+	    --version phase3-mf-selection --split validation --protocol full
+
+compare-baselines:  ## Full Phase 3 comparison: selection, lock, final, reports
+	$(PYTHON) scripts/compare_baselines.py \
+	    --config-dir configs --data-config configs/data/pixelrec50k.yaml
 
 serve:  ## Run the API locally
 	$(PYTHON) scripts/serve.py

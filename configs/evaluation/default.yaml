@@ -1,8 +1,8 @@
 # ---------------------------------------------------------------------------
 # Offline evaluation protocol.
 #
-# PHASE 1 STATUS: contract only. Metric implementations land in Phase 2
-# alongside the first trained baseline (see docs/phase_reports/phase_01_report.md).
+# Implemented in Phase 3. Metric definitions and their validation against
+# hand-computed fixtures are documented in docs/evaluation/metric_definitions.md.
 # ---------------------------------------------------------------------------
 evaluation:
   k_values: [5, 10, 20, 50]
@@ -36,3 +36,21 @@ evaluation:
   # An evaluation run fails loudly rather than reporting a partial table when
   # fewer than this fraction of test users produced recommendations.
   min_user_coverage: 0.95
+
+  # User-level bootstrap confidence intervals for the primary metrics
+  # (recall@20, ndcg@20). Deterministic given the seed. Disabled in unit tests
+  # for speed; enabled for every reported real-data result.
+  bootstrap:
+    enabled: true
+    samples: 1000
+    confidence_level: 0.95
+    seed: 42
+
+  # Beyond-accuracy reporting.
+  beyond_accuracy:
+    # Additive smoothing for the novelty probability p(i), applied only to items
+    # with zero training interactions so -log2(p) stays finite.
+    novelty_smoothing: 1.0
+    # Include eligible items that received zero exposure in the Gini
+    # denominator. Excluding them would flatter a model that ignores the tail.
+    gini_includes_zero_exposure: true

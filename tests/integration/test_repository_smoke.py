@@ -39,12 +39,36 @@ class TestImportIntegrity:
     def test_every_module_imports(self, module_name):
         importlib.import_module(module_name)
 
-    def test_no_module_requires_the_ml_extra(self):
-        """Phase 1 must import with none of torch/faiss/lightgbm installed."""
-        heavy = {"torch", "faiss", "lightgbm", "sentence_transformers", "mlflow", "dvc"}
+    def test_only_bpr_requires_the_modelling_extra(self):
+        """Everything except the BPR module must import without torch.
+
+        Popularity is the terminal stage of the serving fallback chain and the
+        evaluator scores every model, so both have to work on a lightweight
+        install. `models.baselines.bpr` is the single documented exception - it
+        is imported lazily by the runner and by the CLIs.
+        """
+        heavy = {"faiss", "lightgbm", "sentence_transformers", "mlflow", "dvc"}
+        torch_only = "omnirank.models.baselines.bpr"
         for module_name in ALL_MODULES:
+            if module_name == torch_only:
+                continue
             importlib.import_module(module_name)
-        assert heavy.isdisjoint(sys.modules)
+        assert heavy.isdisjoint(sys.modules), sorted(heavy & set(sys.modules))
+
+    def test_evaluation_and_popularity_do_not_pull_torch(self):
+        """Asserted in a subprocess, because this session may already hold torch."""
+        result = subprocess.run(  # noqa: S603
+            [
+                sys.executable, "-c",
+                "import sys;"
+                "import omnirank.evaluation;"
+                "from omnirank.models.baselines import PopularityRecommender;"
+                "print('torch' in sys.modules)",
+            ],
+            capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=90, check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "False", "torch leaked into the core import path"
 
     def test_every_public_module_has_a_docstring(self):
         missing = [
@@ -216,26 +240,59 @@ class TestScripts:
         assert source.count("RemoteFile(") == 4
 
     def test_train_rejects_an_unknown_model(self):
-        assert self._invoke("train.py", "--model", "nonsense").returncode == 2
+        """Phase 3 implements two models; argparse rejects anything else."""
+        assert self._invoke("train.py", "--model", "nonsense", "--version", "x").returncode == 2
 
-    def test_train_reports_the_phase_for_a_known_model(self):
-        result = self._invoke("train.py", "--model", "lightgcn")
-        assert result.returncode == 3
-        assert "planned_phase=3" in result.stderr
+    def test_train_requires_a_version(self):
+        assert self._invoke("train.py", "--model", "popularity").returncode == 2
 
     def test_evaluate_reports_a_missing_artifact(self):
-        result = self._invoke("evaluate.py", "--model", "absent")
-        assert result.returncode == 4
-        assert "artifact_unavailable" in result.stderr
+        result = self._invoke(
+            "evaluate.py", "--model", "popularity", "--version", "does-not-exist"
+        )
+        assert result.returncode == 2
+        assert "artifact_not_found" in result.stderr
 
-    def test_no_script_prints_a_metric(self):
-        """Fabricated benchmark numbers are the one thing these must never emit."""
+    def test_evaluate_rejects_a_non_full_protocol(self):
+        """Sampled results must never be produced by the reporting path."""
+        result = self._invoke(
+            "evaluate.py", "--model", "popularity", "--version", "v", "--protocol", "sampled"
+        )
+        assert result.returncode == 2
+
+    def test_final_stage_refuses_without_a_locked_configuration(self, tmp_path):
+        """Test data must not be read before a configuration is locked."""
+        import shutil
+
+        selection = PROJECT_ROOT / "reports/metrics/phase_03/selected_configuration.json"
+        backup = tmp_path / "selected_configuration.json"
+        existed = selection.is_file()
+        if existed:
+            shutil.move(selection, backup)
+        try:
+            result = self._invoke("compare_baselines.py", "--stage", "final", "--skip-bpr")
+            assert result.returncode == 3
+            assert "no_selection" in result.stderr
+        finally:
+            if existed:
+                shutil.move(backup, selection)
+
+    def test_failing_runs_never_emit_a_metric(self):
+        """A run that produced no measurement must not print one.
+
+        Phase 3 scripts legitimately report real metrics on success - they come
+        from the evaluator, computed from real recommendations. What must never
+        happen is a metric appearing from a run that computed nothing, which is
+        how a placeholder number ends up in a status update.
+        """
         for script, args in (
-            ("prepare_data.py", ("--validate-only",)),
-            ("train.py", ("--model", "popularity")),
-            ("evaluate.py", ("--model", "popularity")),
+            # A dataset that does not exist: cannot compute anything.
+            ("prepare_data.py", ("--config", "data/nonexistent.yaml")),
+            # An unregistered artifact: nothing to evaluate.
+            ("evaluate.py", ("--model", "popularity", "--version", "does-not-exist")),
         ):
             output = self._invoke(script, *args)
+            assert output.returncode != 0, script
             combined = (output.stdout + output.stderr).lower()
-            for forbidden in ("ndcg@", "recall@0.", "precision@0."):
-                assert forbidden not in combined
+            for forbidden in ("ndcg@", "recall@2", "precision@2", "hit_rate@"):
+                assert forbidden not in combined, (script, forbidden)

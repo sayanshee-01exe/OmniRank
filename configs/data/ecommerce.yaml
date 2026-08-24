@@ -11,7 +11,7 @@ data:
   dataset_version: v0            # bumped whenever the raw snapshot changes
 
   # Which interaction events exist in this domain, and the implicit-feedback
-  # weight each carries. Weights are used by Phase 2 retrieval training.
+  # weight each carries. Weights are used by retrieval training from Phase 3 on.
   event_types:
     view: 1.0
     click: 2.0

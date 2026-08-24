@@ -1,39 +1,57 @@
 # ---------------------------------------------------------------------------
 # Retrieval / ranking stage configuration.
 #
-# PHASE 1 STATUS: these blocks are declared and validated, but no model that
-# consumes them is implemented yet. They exist now so that Phase 2 adds model
-# code without changing the config contract. `enabled: false` everywhere means
-# the serving layer reports "not ready" rather than silently returning nothing.
+# Phase roadmap:
+#   3 popularity, matrix_factorization   4 lightgcn, sasrec   5 two_tower
+#   6 ranker, reranker                   7 monitoring
+#
+# `enabled: false` means the *serving* pipeline does not use the generator; it
+# says nothing about whether the model is implemented. Phase 3 implements
+# popularity and matrix_factorization as offline baselines, and serving does not
+# consume them until Phase 6.
 # ---------------------------------------------------------------------------
 models:
   # Per-generator candidate budgets, merged by the aggregator (component 11).
   candidate_generators:
     popularity:
       enabled: false
-      phase: 2
+      phase: 3
       top_k: 200
-      # Popularity is time-decayed so it does not freeze on all-time winners.
-      half_life_days: 30
+      # global_count | time_decay
+      variant: time_decay
+      # Selected on validation NDCG@20 in Phase 3. PixelRec50K training
+      # interactions have a median age of 485 days and span 3,788, so short
+      # half-lives collapse the ranking onto a handful of recent items; the
+      # search grid was extended accordingly. See docs/models/popularity.md.
+      half_life_days: 365
     matrix_factorization:
       enabled: false
-      phase: 2
+      phase: 3
       top_k: 200
-      factors: 64
+      implementation: bpr
+      embedding_dim: 64
+      learning_rate: 0.005
+      regularization: 0.0001
+      batch_size: 4096
+      epochs: 20
+      negatives_per_positive: 1
+      # Users scored per batch during full-catalogue retrieval. Bounds peak
+      # memory at batch_size x catalogue_size floats, never users x items.
+      evaluation_user_batch_size: 512
     lightgcn:
       enabled: false
-      phase: 3
+      phase: 4
       top_k: 300
       embedding_dim: 64
       num_layers: 3
     two_tower:
       enabled: false
-      phase: 4
+      phase: 5
       top_k: 300
       embedding_dim: 128
     sasrec:
       enabled: false
-      phase: 3
+      phase: 4
       top_k: 200
       embedding_dim: 64
       num_blocks: 2
@@ -53,7 +71,7 @@ models:
 
   ranker:
     enabled: false
-    phase: 5
+    phase: 6
     implementation: lightgbm         # lightgbm | catboost  (see ADR-008)
     objective: lambdarank
     num_leaves: 63
@@ -62,7 +80,7 @@ models:
 
   reranker:
     enabled: false
-    phase: 5
+    phase: 6
     strategy: mmr
     # 1.0 = pure relevance, 0.0 = pure diversity.
     lambda_relevance: 0.7

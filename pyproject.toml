@@ -35,10 +35,17 @@ data = [
   "pandas>=2.2,<3",
   "pyarrow>=16.0",
 ]
-# Phase 2+ modelling stack. Not required by Phase 1 and never imported at import time.
-ml = [
+# Phase 3 baselines. Deliberately narrow: BPR needs torch and nothing else, and
+# forcing CI to install sentence-transformers, faiss and mlflow just to test a
+# matrix factorization would make the model job slow enough that people stop
+# running it. `ml` includes this, so nothing that depended on `ml` breaks.
+baseline = [
   "omnirank[data]",
   "torch>=2.3",
+]
+# Full modelling stack for Phase 4+. Never imported at package import time.
+ml = [
+  "omnirank[baseline]",
   "sentence-transformers>=3.0",
   "lightgbm>=4.3",
   "faiss-cpu>=1.8",
@@ -106,7 +113,11 @@ ignore = [
 # S105/S106: the redaction tests must pass literal fake secrets to prove they are masked.
 # S603: subprocess calls in the smoke tests use a fixed argv with no user input.
 # S104: a test asserts on the "0.0.0.0" string; nothing binds to it.
-"tests/**" = ["S101", "S104", "S105", "S106", "S603", "ANN001", "ANN201", "ANN202"]
+# S311: tests use `random` to generate fixtures, never for cryptography.
+"tests/**" = [
+  "S101", "S104", "S105", "S106", "S311", "S603",
+  "ANN001", "ANN201", "ANN202",
+]
 # CLI entrypoints are the one place where writing to stdout is the interface.
 "scripts/**" = ["T20"]
 

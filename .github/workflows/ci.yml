@@ -15,6 +15,8 @@ env:
   OMNIRANK__LOGGING__FORMAT: json
 
 jobs:
+  # Core job: no modelling dependencies. Proves the package, the data pipeline
+  # and the API still work on a lightweight install.
   check:
     name: lint / typecheck / test
     runs-on: ubuntu-latest
@@ -29,11 +31,11 @@ jobs:
       - name: Set up Python 3.11
         run: uv python install 3.11
 
-      # Dev extras only. The `ml` extra (torch, faiss, lightgbm) is deliberately
-      # not installed: Phase 1 has no code that needs it, and pulling ~2 GB of
-      # wheels would make CI slow enough that people stop reading it.
+      # Dev + data extras only. Torch is installed by the separate baseline job:
+      # pulling it here would slow every lint run, and the core package must keep
+      # working without it.
       - name: Install project
-        run: uv pip install --system -e ".[dev]"
+        run: uv pip install --system -e ".[data,dev]"
 
       - name: Ruff (lint)
         run: ruff check src tests scripts
@@ -58,3 +60,56 @@ jobs:
           spec = create_app(load_config('configs')).openapi()
           print(f'{len(spec[\"paths\"])} paths documented')
           "
+
+      # The evaluator and popularity must work on a torch-free install, because
+      # popularity is the terminal stage of the serving fallback chain.
+      - name: Evaluation and popularity work without torch
+        run: |
+          python -c "
+          import sys
+          import omnirank.evaluation
+          from omnirank.models.baselines import PopularityRecommender
+          assert 'torch' not in sys.modules, 'torch leaked into the core import path'
+          print('evaluation + popularity import cleanly without torch')
+          "
+          pytest tests/unit/evaluation tests/unit/models/test_popularity.py \
+                 tests/unit/models/test_negative_sampling.py -q
+
+  # Baseline-model job: the only place torch is installed.
+  baselines:
+    name: baseline models (torch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      # `baseline` is torch only - not sentence-transformers, faiss, lightgbm or
+      # mlflow, none of which Phase 3 needs.
+      - name: Install project with the baseline extra
+        run: uv pip install --system -e ".[baseline,dev]"
+
+      # Metric values are asserted against hand-computed numbers, so a change in
+      # the evaluator that alters a reported metric fails here.
+      - name: Evaluation metric tests
+        run: pytest tests/unit/evaluation -q
+
+      - name: Popularity and negative-sampling tests
+        run: pytest tests/unit/models/test_popularity.py \
+                    tests/unit/models/test_negative_sampling.py -q
+
+      # Includes save/load round-trip equality: a persistence change that alters
+      # recommendations fails here.
+      - name: BPR tests
+        run: pytest tests/unit/models/test_bpr.py -q
+
+      # Small, deterministic, CPU-only fixture training and evaluation.
+      # No PixelRec download, no GPU, no full-dataset training.
+      - name: Fixture training and evaluation integration test
+        run: pytest tests/integration/test_baseline_pipeline.py -q

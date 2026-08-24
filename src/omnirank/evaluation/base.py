@@ -13,9 +13,9 @@ Two contracts:
 * :class:`GroundTruth` - the held-out relevance signal, built from the test
   split by the same code for every model, so no model gets an easier target.
 
-PHASE 1 STATUS: contracts only. Metric implementations land in Phase 2
-alongside the first baseline, and are validated against hand-computed fixtures
-before any model result is reported.
+Phase 3 implements these contracts in :mod:`omnirank.evaluation.evaluator` and
+:mod:`omnirank.evaluation.metrics`, validated against hand-computed fixtures
+before any model result was reported.
 """
 
 from __future__ import annotations

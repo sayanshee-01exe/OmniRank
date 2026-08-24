@@ -413,6 +413,32 @@ class ModelsConfig(_Section):
 
 
 # --- evaluation ------------------------------------------------------------ #
+class BootstrapConfig(_Section):
+    """User-level bootstrap confidence intervals for the primary metrics.
+
+    Deterministic given ``seed``: the same recommendations and ground truth
+    always produce the same interval, so a reported interval is reproducible
+    rather than a property of one lucky run.
+    """
+
+    enabled: bool = True
+    samples: int = Field(default=1000, ge=1)
+    confidence_level: float = Field(default=0.95, gt=0.0, lt=1.0)
+    seed: int = Field(default=42, ge=0)
+
+
+class BeyondAccuracyConfig(_Section):
+    """Coverage, novelty, and exposure-inequality reporting."""
+
+    # Additive smoothing on the novelty probability, applied only where a zero
+    # would make -log2(p) infinite. Recorded in the report so the number is
+    # never quoted without the rule that produced it.
+    novelty_smoothing: float = Field(default=1.0, ge=0.0)
+    # Whether eligible-but-never-recommended items count toward the Gini
+    # denominator. Excluding them flatters a model that ignores the tail.
+    gini_includes_zero_exposure: bool = True
+
+
 class EvaluationConfig(_Section):
     """Offline evaluation protocol. Component 9."""
 
@@ -423,6 +449,8 @@ class EvaluationConfig(_Section):
     protocol: Literal["full", "sampled"] = "full"
     num_sampled_negatives: int = Field(default=100, ge=1)
     min_user_coverage: float = Field(default=0.95, ge=0.0, le=1.0)
+    bootstrap: BootstrapConfig = Field(default_factory=BootstrapConfig)
+    beyond_accuracy: BeyondAccuracyConfig = Field(default_factory=BeyondAccuracyConfig)
 
     @model_validator(mode="after")
     def _check_k_values(self) -> Self:
@@ -788,6 +816,8 @@ __all__ = [
     "AggregationConfig",
     "ApiConfig",
     "AppConfig",
+    "BeyondAccuracyConfig",
+    "BootstrapConfig",
     "DataConfig",
     "DatabaseConfig",
     "DatasetPathsConfig",
