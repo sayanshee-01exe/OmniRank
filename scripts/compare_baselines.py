@@ -388,6 +388,10 @@ def _run_final(
             )
         )
 
+    # Deterministic, anonymised examples plus explicit failures (never a
+    # highlight reel): see runner.recommendation_examples.
+    examples = {result.model_name: result.extra.get("examples", {}) for result in results}
+
     deltas = []
     if len(results) == 2:
         deltas = [
@@ -409,6 +413,7 @@ def _run_final(
         },
         REPORT_ROOT / "final_test_metrics.json",
     )
+    write_json(examples, REPORT_ROOT / "recommendation_examples.json")
     write_csv(comparison_table(results), REPORT_ROOT / "model_comparison.csv")
     write_csv(slice_table(results), REPORT_ROOT / "slice_metrics.csv")
     write_csv(runtime_table(results), REPORT_ROOT / "runtime_metrics.csv")

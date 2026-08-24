@@ -158,9 +158,7 @@ class TestFastPathAgreesWithReference:
                 if metric == "ndcg":
                     from omnirank.evaluation.metrics import ndcg_at_k
 
-                    value = ndcg_at_k(
-                        recommended, relevant, k, relevance=dict(relevant_grades)
-                    )
+                    value = ndcg_at_k(recommended, relevant, k, relevance=dict(relevant_grades))
                 else:
                     value = function(recommended, relevant, k)
                 out[metric_name(metric, k)] = value

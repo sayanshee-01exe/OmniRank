@@ -57,15 +57,20 @@ class TestImportIntegrity:
 
     def test_evaluation_and_popularity_do_not_pull_torch(self):
         """Asserted in a subprocess, because this session may already hold torch."""
-        result = subprocess.run(  # noqa: S603
+        result = subprocess.run(
             [
-                sys.executable, "-c",
+                sys.executable,
+                "-c",
                 "import sys;"
                 "import omnirank.evaluation;"
                 "from omnirank.models.baselines import PopularityRecommender;"
                 "print('torch' in sys.modules)",
             ],
-            capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=90, check=False,
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+            timeout=90,
+            check=False,
         )
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == "False", "torch leaked into the core import path"
@@ -247,9 +252,7 @@ class TestScripts:
         assert self._invoke("train.py", "--model", "popularity").returncode == 2
 
     def test_evaluate_reports_a_missing_artifact(self):
-        result = self._invoke(
-            "evaluate.py", "--model", "popularity", "--version", "does-not-exist"
-        )
+        result = self._invoke("evaluate.py", "--model", "popularity", "--version", "does-not-exist")
         assert result.returncode == 2
         assert "artifact_not_found" in result.stderr
 

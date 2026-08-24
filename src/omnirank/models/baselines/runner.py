@@ -7,6 +7,7 @@ brought its own harness would not be a comparison.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 from typing import Any
 
@@ -195,43 +196,96 @@ def run_experiment(
         runtimes=runtimes,
         intervals=intervals,
         dataset_identity=dataset.identity.to_dict(),
-        extra=extra or {},
+        extra={
+            # Deterministic, anonymised, and paired with explicit failures.
+            "examples": recommendation_examples(recommendations, ground_truth),
+            **(extra or {}),
+        },
     )
 
 
 def recommendation_examples(
-    recommendations: Any, ground_truth: Any, *, count: int = 5
-) -> list[dict[str, Any]]:
-    """A deterministic sample of users, with their targets and top items.
+    recommendations: Any, ground_truth: Any, *, count: int = 5, seed: int = 0
+) -> dict[str, Any]:
+    """A deterministic sample of users, plus deterministic failures and successes.
 
-    Users are chosen by a hash of their id rather than by metric value, so the
-    sample cannot be cherry-picked to flatter the model. Ids are anonymised to a
-    stable pseudonym: the report does not need real identifiers to be useful.
+    Selection is a seeded draw over the **sorted** user list, so it depends only
+    on the seed and not on which users happened to score well - the sample
+    cannot be cherry-picked to flatter a model, and it reproduces exactly.
+
+    Users are reported under stable pseudonyms. A public report does not need
+    real identifiers to be useful, and the dataset licence gives no grounds for
+    republishing them.
+
+    Returns:
+        Three groups, each a deterministic draw:
+
+        * ``sampled`` - a neutral draw over all evaluated users. At a hit rate
+          of about 1% this is almost entirely misses, which is the honest
+          picture of the task.
+        * ``failures`` - drawn only from users whose target was missed.
+        * ``successes`` - drawn only from users whose target was found, so the
+          report can show what a hit looks like. **Not representative**, and
+          labelled as such; ``hit_rate_in_top_10`` gives the base rate it was
+          drawn from, so nobody mistakes the sample for the population.
+
+        Reporting all three is what stops a "here are some examples" section
+        from quietly being a highlight reel.
     """
     users = sorted(ground_truth.users)
     if not users:
-        return []
-    generator = np.random.default_rng(0)
-    chosen = [
-        users[index]
-        for index in generator.choice(len(users), size=min(count, len(users)), replace=False)
-    ]
-    examples: list[dict[str, Any]] = []
-    for position, user in enumerate(sorted(chosen)):
+        return {"sampled": [], "failures": []}
+
+    def pseudonym(user: str) -> str:
+        """A stable, anonymous label for one user.
+
+        Derived from the id, so the *same* user carries the *same* label across
+        models - which is what makes "popularity found this user's target,
+        BPR did not" a comparison rather than two unrelated lists. Positional
+        labels would not survive that, and would also render two different
+        samples identically.
+        """
+        return "user_" + hashlib.blake2b(user.encode(), digest_size=4).hexdigest()
+
+    def describe(user: str) -> dict[str, Any]:
         target = set(ground_truth.truth.items_for(user))
-        top = list(recommendations.items_for(user))[:10]
-        examples.append(
-            {
-                "user": f"user_{position:02d}",
-                "target_in_top_10": bool(target & set(top)),
-                "target_rank": next(
-                    (index + 1 for index, item in enumerate(top) if item in target), None
-                ),
-                "recommended_count": len(recommendations.items_for(user)),
-                "target_was_cold": user in ground_truth.cold_target_users,
-            }
+        recommended = list(recommendations.items_for(user))
+        top = recommended[:10]
+        rank = next((index + 1 for index, item in enumerate(top) if item in target), None)
+        return {
+            "user": pseudonym(user),
+            "target_rank_within_top_10": rank,
+            "target_in_top_10": rank is not None,
+            "recommended_count": len(recommended),
+            "target_was_cold": user in ground_truth.cold_target_users,
+        }
+
+    generator = np.random.default_rng(seed)
+    sampled_index = generator.choice(len(users), size=min(count, len(users)), replace=False)
+    sampled = [describe(users[int(index)]) for index in sorted(sampled_index.tolist())]
+
+    def hit(user: str) -> bool:
+        return bool(
+            set(ground_truth.truth.items_for(user))
+            & set(list(recommendations.items_for(user))[:10])
         )
-    return examples
+
+    missed = [user for user in users if not hit(user)]
+    found = [user for user in users if hit(user)]
+
+    def draw(population: list[str], offset: int) -> list[dict[str, Any]]:
+        if not population:
+            return []
+        generator = np.random.default_rng(seed + offset)
+        index = generator.choice(len(population), size=min(count, len(population)), replace=False)
+        return [describe(population[int(item)]) for item in sorted(index.tolist())]
+
+    return {
+        "sampled": sampled,
+        "failures": draw(missed, 1),
+        "successes": draw(found, 2),
+        "hit_rate_in_top_10": round(len(found) / len(users), 6) if users else 0.0,
+    }
 
 
 __all__ = [

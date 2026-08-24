@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import sys
 from pathlib import Path
 
@@ -84,6 +85,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Compute device for BPR. Never selects CUDA.",
     )
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing version.")
+    parser.add_argument(
+        "--from-selection",
+        action="store_true",
+        help=(
+            "Take hyperparameters from reports/metrics/phase_03/selected_configuration.json "
+            "instead of YAML. Required for a final-stage run, so the registered model is "
+            "provably the locked configuration rather than whatever YAML happens to say."
+        ),
+    )
     parser.add_argument(
         "--no-register",
         action="store_true",
@@ -142,6 +152,34 @@ def main(argv: list[str] | None = None) -> int:
             return CONFIG_ERROR_EXIT
 
         declared = config.models.candidate_generators[args.model].model_dump()
+        if args.from_selection:
+            selection_file = Path("reports/metrics/phase_03/selected_configuration.json")
+            if not selection_file.is_file():
+                logger.error(
+                    "train.no_selection",
+                    run_id=run_id,
+                    detail=(
+                        "--from-selection needs a locked configuration. Run "
+                        "`python scripts/compare_baselines.py --stage selection` first."
+                    ),
+                    expected=str(selection_file),
+                )
+                return CONFIG_ERROR_EXIT
+            locked = json.loads(selection_file.read_text()).get(args.model)
+            if not locked:
+                logger.error("train.model_not_in_selection", run_id=run_id, model=args.model)
+                return CONFIG_ERROR_EXIT
+            # The selection file records validation metrics beside the config;
+            # they are provenance, not hyperparameters.
+            declared = {
+                key: value for key, value in locked.items() if not key.startswith("validation_")
+            }
+            logger.info(
+                "train.using_locked_configuration",
+                run_id=run_id,
+                model=args.model,
+                configuration=declared,
+            )
         # Both branches assign a different concrete type; the registry and the
         # runner accept either through their protocol surfaces.
         model: Any
@@ -223,9 +261,11 @@ def main(argv: list[str] | None = None) -> int:
                     random_seed=seed,
                     device=device,
                     metrics={
-                        key: value
+                        # Prefixed by the split they were measured on, so a
+                        # validation number can never be mistaken for a test one.
+                        f"{target_split}_{key}": value
                         for key, value in result.strict.flat().items()
-                        if key in ("recall@20", "ndcg@20", "coverage@20")
+                        if key in ("recall@20", "ndcg@20", "coverage@20", "novelty@20")
                     },
                     fit_splits=fit_splits,
                     evaluation_protocol="full_catalogue",

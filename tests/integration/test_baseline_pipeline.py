@@ -57,9 +57,7 @@ def fixture_dataset() -> dict[str, pd.DataFrame]:
     frame["split"] = "train"
     frame.loc[frame.interaction_order == 6, "split"] = "validation"
     frame.loc[frame.interaction_order == 7, "split"] = "test"
-    return {
-        str(name): group.reset_index(drop=True) for name, group in frame.groupby("split")
-    }
+    return {str(name): group.reset_index(drop=True) for name, group in frame.groupby("split")}
 
 
 @pytest.fixture
