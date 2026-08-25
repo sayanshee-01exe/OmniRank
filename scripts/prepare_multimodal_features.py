@@ -253,6 +253,20 @@ def main(argv: list[str] | None = None) -> int:
         }
         manifest_path = features_dir / "multimodal_feature_manifest.json"
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+
+        # The feature index tables are outputs the Phase 2 dataset manifest
+        # checksums. Aligning real vectors rewrites them, so leaving the
+        # recorded digests behind makes every checksum-verifying dataset load
+        # fail with a corruption error for a file that is simply newer.
+        rewritten = _refresh_dataset_manifest(processed, features_dir, requested)
+        logger.info(
+            "features.dataset_manifest_refreshed",
+            run_id=run_id,
+            updated=rewritten,
+            detail=(
+                "Feature index checksums in the dataset manifest now match the aligned tables."
+            ),
+        )
         logger.info(
             "features.manifest_written",
             run_id=run_id,
@@ -260,6 +274,60 @@ def main(argv: list[str] | None = None) -> int:
             **manifest["modality_counts"],
         )
     return 0
+
+
+def _refresh_dataset_manifest(
+    processed: Path, features_dir: Path, modalities: list[str]
+) -> list[str]:
+    """Update the dataset manifest's digests for the files alignment rewrote.
+
+    Only the feature index tables this command actually regenerated are
+    touched. Recomputing every digest would let an unrelated corrupted output
+    be silently blessed by running feature preparation.
+    """
+    manifest_path = processed / "dataset_manifest.json"
+    if not manifest_path.is_file():
+        return []
+    manifest = json.loads(manifest_path.read_text())
+    checksums = manifest.get("output_checksums")
+    descriptors = manifest.get("output_files")
+    if not isinstance(checksums, dict) or not isinstance(descriptors, dict):
+        return []
+
+    updated: list[str] = []
+    for modality in modalities:
+        key = f"features/{modality}_feature_index.parquet"
+        path = features_dir / f"{modality}_feature_index.parquet"
+        if not path.is_file():
+            continue
+        digest = file_checksum(path)
+        changed = False
+        if key in checksums and checksums[key] != digest:
+            checksums[key] = digest
+            changed = True
+        # `output_files` is the record the dataset loader actually verifies
+        # against; `output_checksums` is a flat convenience copy. Updating only
+        # one leaves the loader rejecting a file the manifest calls current.
+        descriptor = descriptors.get(key)
+        if isinstance(descriptor, dict):
+            if descriptor.get("sha256") != digest:
+                descriptor["sha256"] = digest
+                changed = True
+            descriptor["bytes"] = path.stat().st_size
+        if changed:
+            updated.append(key)
+    if updated:
+        manifest.setdefault("known_limitations", [])
+        note = (
+            "Feature index checksums were refreshed by "
+            "scripts/prepare_multimodal_features.py after real multimodal "
+            "vectors were aligned in Phase 5; the Phase 2 run recorded them at "
+            "zero coverage."
+        )
+        if note not in manifest["known_limitations"]:
+            manifest["known_limitations"].append(note)
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    return updated
 
 
 def _modality_mask(

@@ -1,0 +1,29 @@
+{
+  "artifact_path": "artifacts/models/pixelrec50k/sasrec/phase5-sasrec-final",
+  "configuration_hash": "aade728eb36f2fc95ad3ceb29b844baf8a07a5699a1382e5dc69209a0ca2567a",
+  "created_at": "2026-08-25T08:04:15.032948Z",
+  "feature_version": "phase3-raw-interactions",
+  "format_version": 1,
+  "framework_version": {
+    "torch": "2.13.0"
+  },
+  "git_commit": "80ff744667323d971fbc510e6385eb09d0b422da",
+  "id_mapping_fingerprints": {
+    "item": "235fcff3343a651150e8f220bfebc9bdb986e78ab47b80c3d025a8259048bc3c"
+  },
+  "metrics": {
+    "test_coverage@20": 0.475347,
+    "test_ndcg@20": 0.003842388188518475,
+    "test_novelty@20": 14.765319,
+    "test_recall@20": 0.00984
+  },
+  "model_name": "sasrec",
+  "model_type": "retrieval_model",
+  "model_version": "phase5-sasrec-final",
+  "notes": "stage=final | fit_splits=train+validation | protocol=full_catalogue | trained_on_device=mps | artifact_sha256=8f3ce1ca722b86ba630878adaed2a4572aacb3d44bbb1847113dbe6ee12aa828 | item_mapping_checksum=235fcff3343a651150e8f220bfebc9bdb986e78ab47b80c3d025a8259048bc3c | split_version=1 | mapping_version=1 | dataset_manifest=9d1eabb7977d24ac | python=3.11.15",
+  "python_version": "3.11.15",
+  "random_seed": 42,
+  "required_index_version": 1,
+  "supported_device": "any",
+  "training_data_version": "pixelrec50k@v1"
+}

@@ -44,9 +44,10 @@ class TestImportIntegrity:
 
         Popularity is the terminal stage of the serving fallback chain and the
         evaluator scores every model, so a lightweight install has to work. The
-        torch-backed models (`baselines.bpr`, `lightgcn`, `sasrec`) are the
-        documented exceptions and are imported lazily by the runner and CLIs;
-        they are skipped here rather than being allowed to pull torch in.
+        torch-backed models (`baselines.bpr`, `lightgcn`, `sasrec`,
+        `two_tower`) are the documented exceptions and are imported lazily by
+        the runner and CLIs; they are skipped here rather than being allowed to
+        pull torch in.
 
         FAISS is checked too, and it is the interesting case: the vector index
         module must import fine without it, because `_require_faiss` defers the
@@ -65,6 +66,12 @@ class TestImportIntegrity:
             "omnirank.models.sasrec.model",
             "omnirank.retrieval.blended",
             "omnirank.retrieval.runner",
+            "omnirank.models.two_tower",
+            "omnirank.models.two_tower.losses",
+            "omnirank.models.two_tower.model",
+            "omnirank.models.two_tower.training",
+            "omnirank.models.two_tower.dataset",
+            "omnirank.models.two_tower.persistence",
         }
         modules = [name for name in ALL_MODULES if name not in skip]
         script = (
