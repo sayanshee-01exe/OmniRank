@@ -76,14 +76,14 @@ User and item data
         │
         ▼
 Candidate generation  ── each implements CandidateGenerator
-├── Popularity fallback              Phase 2
-├── Matrix factorization baseline    Phase 2
-├── LightGCN collaborative retrieval Phase 3
-├── Multimodal two-tower retrieval   Phase 4
-└── SASRec sequential retrieval      Phase 3
+├── Popularity fallback              Phase 3
+├── Matrix factorization baseline    Phase 3
+├── LightGCN collaborative retrieval Phase 4
+├── SASRec sequential retrieval      Phase 4
+└── Multimodal two-tower retrieval   Phase 5
         │
         ▼
-Candidate aggregation and deduplication    Phase 3 — CandidateAggregator
+Candidate aggregation and deduplication    Phase 4 — CandidateAggregator
         │
         ▼
 Ranking-feature generation                 Phase 5 — FeatureBuilder

@@ -1,0 +1,83 @@
+# ---------------------------------------------------------------------------
+# Candidate aggregation experiments (Phase 4).
+#
+# The serving defaults live in retrieval.yaml under `models.aggregation`. This
+# file is the experiment grid: which fusions to measure, over which sources.
+# ---------------------------------------------------------------------------
+experiments:
+  # Each entry becomes one BlendedRetriever, evaluated by the same harness that
+  # scores a single retriever. A fusion measured by its own bespoke path would
+  # be comparing harnesses as much as models.
+  - name: hybrid_popularity_bpr
+    strategy: reciprocal_rank_fusion
+    sources: [popularity, matrix_factorization]
+    # The Phase 4 hybrid baseline: the question it answers is whether combining
+    # two weak, differently-biased retrievers beats either alone.
+    source_weights:
+      matrix_factorization: 1.0
+      popularity: 1.0
+
+  - name: rrf_all_collaborative
+    strategy: reciprocal_rank_fusion
+    sources: [popularity, matrix_factorization, lightgcn, sasrec]
+    source_weights:
+      sasrec: 1.0
+      lightgcn: 1.0
+      matrix_factorization: 1.0
+      popularity: 1.0
+
+  - name: rrf_weighted_by_strength
+    strategy: reciprocal_rank_fusion
+    sources: [popularity, matrix_factorization, lightgcn, sasrec]
+    # Weighted towards the models that scored higher alone on validation. Whether
+    # this beats uniform weighting is exactly the sort of thing that looks
+    # obvious and often is not, so it is measured rather than assumed.
+    source_weights:
+      lightgcn: 1.0
+      sasrec: 0.8
+      matrix_factorization: 0.5
+      popularity: 0.2
+
+  - name: round_robin_all
+    strategy: weighted_round_robin
+    sources: [popularity, matrix_factorization, lightgcn, sasrec]
+    source_weights:
+      lightgcn: 1.0
+      sasrec: 0.8
+      matrix_factorization: 0.5
+      popularity: 0.2
+
+  - name: score_union_all
+    strategy: normalized_score_union
+    sources: [popularity, matrix_factorization, lightgcn, sasrec]
+    # rank_percentile, not min_max: these generators' raw scores are a decayed
+    # interaction count and several dot products, which differ by orders of
+    # magnitude. min_max would still "work" and would silently let whichever
+    # source has the widest spread dominate.
+    normalization: rank_percentile
+    source_weights:
+      lightgcn: 1.0
+      sasrec: 0.8
+      matrix_factorization: 0.5
+      popularity: 0.2
+
+defaults:
+  rrf_constant: 60.0
+  # Sources are asked for over_retrieval_factor x k candidates before fusion.
+  # At 1, fusing top-k lists and truncating back to k returns fewer than k
+  # distinct items whenever the sources agree.
+  over_retrieval_factor: 3
+  k: 20
+
+notes:
+  - >-
+    Reciprocal rank fusion is the default strategy for cross-model blending
+    because it compares ranks, never scores. A popularity count and a SASRec
+    logit are not on a common scale and no normalisation makes them genuinely
+    comparable - it only hides that they are not.
+  - >-
+    Ties break on item id in every strategy, so two runs of the same blend
+    produce identical orderings. Retrieval output becomes ranker training data
+    in Phase 6; an ordering that depended on dict iteration order would make
+    every downstream experiment irreproducible for a reason nobody would think
+    to look for.

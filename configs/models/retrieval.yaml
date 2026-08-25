@@ -6,9 +6,13 @@
 #   6 ranker, reranker                   7 monitoring
 #
 # `enabled: false` means the *serving* pipeline does not use the generator; it
-# says nothing about whether the model is implemented. Phase 3 implements
-# popularity and matrix_factorization as offline baselines, and serving does not
-# consume them until Phase 6.
+# says nothing about whether the model is implemented. Phases 3 and 4 implement
+# popularity, matrix_factorization, lightgcn and sasrec as offline models;
+# serving does not consume any of them until Phase 6.
+#
+# The values here are generic defaults. The configurations actually selected on
+# validation live in `phase3_selected.yaml` and `phase4_selected.yaml`, which are
+# generated from the selection records rather than hand-edited.
 # ---------------------------------------------------------------------------
 models:
   # Per-generator candidate budgets, merged by the aggregator (component 11).
@@ -43,6 +47,9 @@ models:
       phase: 4
       top_k: 300
       embedding_dim: 64
+      # 0 disables propagation entirely, which degenerates to matrix
+      # factorization. Kept reachable because it is the ablation that shows
+      # whether the graph is doing the work.
       num_layers: 3
     two_tower:
       enabled: false
@@ -56,16 +63,31 @@ models:
       embedding_dim: 64
       num_blocks: 2
       num_heads: 2
+      # Padding is the item id one past the last real item, so it can never
+      # collide with a catalogue entry. Derived, not configured.
+      maximum_sequence_length: 50
 
   aggregation:
-    strategy: weighted_round_robin   # weighted_round_robin | score_union
+    # weighted_round_robin | reciprocal_rank_fusion | normalized_score_union
+    strategy: weighted_round_robin
     max_candidates: 1000
+    # Damping constant for reciprocal_rank_fusion. Smaller values sharpen the
+    # advantage of a source's top ranks.
+    rrf_constant: 60.0
+    # Normalisation for normalized_score_union: min_max | z_score |
+    # rank_percentile. Score-based fusion across generators whose scores are a
+    # decayed count and a dot product is only meaningful after normalising.
+    normalization: rank_percentile
+    # Each source is asked for this multiple of k before fusion, so the output
+    # still fills k when the sources overlap heavily.
+    over_retrieval_factor: 3
     # Source priority when the same item arrives from several generators; the
     # merged candidate keeps every contributing source in `sources`.
+    # two_tower is absent because it is not implemented until Phase 5; a weight
+    # for a generator that cannot run would silently do nothing.
     source_weights:
       sasrec: 1.0
       lightgcn: 0.9
-      two_tower: 0.8
       matrix_factorization: 0.5
       popularity: 0.2
 

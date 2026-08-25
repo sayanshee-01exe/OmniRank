@@ -1,0 +1,62 @@
+# ---------------------------------------------------------------------------
+# Phase 4 SELECTED configuration.
+#
+# Generated from reports/metrics/phase_04/selected_configuration.json, which
+# was locked before any test metric was read. This file records what was
+# actually chosen; the per-model files hold the search spaces. The layers are:
+#
+#   configs/models/retrieval.yaml        generic defaults - small and fast
+#   configs/models/phase3_selected.yaml  what Phase 3 selected on validation
+#   configs/models/{lightgcn,sasrec}.yaml    Phase 4 search spaces
+#   configs/models/phase4_selected.yaml  what Phase 4 selected on validation
+#
+# Consumed by `scripts/train.py --from-selection` and
+# `scripts/compare_aggregation.py`.
+#
+# DO NOT HAND-EDIT. Re-select, then run:
+#     python scripts/generate_phase4_config.py
+# ---------------------------------------------------------------------------
+models:
+  candidate_generators:
+    lightgcn:
+      enabled: false
+      phase: 4
+      top_k: 300
+      embedding_dim: 128
+      num_layers: 3
+      learning_rate: 0.005
+      regularization: 0.0001
+      batch_size: 8192
+      negatives_per_positive: 3
+      max_epochs: 30
+      early_stopping_patience: 10
+      evaluation_user_batch_size: 256
+      seed: 42
+
+    sasrec:
+      enabled: false
+      phase: 4
+      top_k: 200
+      maximum_sequence_length: 50
+      embedding_dim: 64
+      num_blocks: 2
+      num_heads: 2
+      dropout: 0.2
+      learning_rate: 0.001
+      batch_size: 512
+      negatives_per_positive: 1
+      max_epochs: 45
+      early_stopping_patience: 10
+      evaluation_user_batch_size: 256
+      seed: 42
+
+# Validation metrics recorded at selection time, for provenance only. These
+# are NOT test metrics.
+#
+#   lightgcn  validation ndcg@20 = 0.00612
+#   sasrec    validation ndcg@20 = 0.00434
+#
+# Both figures are the best of a search that was cut short by compute, not a
+# demonstrated optimum. LightGCN's NDCG was still rising at num_layers=3, and
+# SASRec's training loss was still falling at its epoch budget. See
+# docs/phase_reports/phase_04_report.md.

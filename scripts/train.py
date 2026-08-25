@@ -57,7 +57,11 @@ from omnirank.models.baselines.runner import (
 CONFIG_ERROR_EXIT = 2
 TRAINING_ERROR_EXIT = 3
 
-MODELS = (POPULARITY, MATRIX_FACTORIZATION)
+LIGHTGCN = "lightgcn"
+SASREC = "sasrec"
+MODELS = (POPULARITY, MATRIX_FACTORIZATION, LIGHTGCN, SASREC)
+#: Models whose hyperparameters are locked by the Phase 4 selection record.
+PHASE_4_MODELS = (LIGHTGCN, SASREC)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -82,7 +86,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--device",
         default="auto",
         choices=("auto", "cpu", "mps"),
-        help="Compute device for BPR. Never selects CUDA.",
+        help="Compute device for the torch models. Never selects CUDA.",
     )
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing version.")
     parser.add_argument(
@@ -113,6 +117,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--epochs", type=int)
     parser.add_argument("--negatives-per-positive", type=int)
+    # Phase 4 axes. Ignored by the Phase 3 models.
+    parser.add_argument("--num-layers", type=int, help="LightGCN propagation depth.")
+    parser.add_argument("--maximum-sequence-length", type=int, help="SASRec context window.")
+    parser.add_argument("--num-blocks", type=int, help="SASRec transformer blocks.")
+    parser.add_argument("--num-heads", type=int, help="SASRec attention heads.")
+    parser.add_argument("--dropout", type=float, help="SASRec dropout.")
     return parser.parse_args(argv)
 
 
@@ -153,14 +163,17 @@ def main(argv: list[str] | None = None) -> int:
 
         declared = config.models.candidate_generators[args.model].model_dump()
         if args.from_selection:
-            selection_file = Path("reports/metrics/phase_03/selected_configuration.json")
+            phase = "phase_04" if args.model in PHASE_4_MODELS else "phase_03"
+            selection_file = Path(f"reports/metrics/{phase}/selected_configuration.json")
             if not selection_file.is_file():
                 logger.error(
                     "train.no_selection",
                     run_id=run_id,
                     detail=(
-                        "--from-selection needs a locked configuration. Run "
-                        "`python scripts/compare_baselines.py --stage selection` first."
+                        "--from-selection needs a locked configuration. Run the "
+                        "matching comparison script's selection stage first "
+                        "(compare_baselines.py for Phase 3 models, "
+                        "compare_retrievers.py for Phase 4 models)."
                     ),
                     expected=str(selection_file),
                 )
@@ -197,6 +210,81 @@ def main(argv: list[str] | None = None) -> int:
                 model, fit_measurement = fit_popularity(dataset, fit_splits, model_config)
                 configuration = model_config.to_dict()
                 device = "cpu"
+            elif args.model == LIGHTGCN:
+                from omnirank.models.lightgcn import LightGCNConfig
+                from omnirank.retrieval.runner import fit_lightgcn
+
+                model_config = LightGCNConfig(
+                    embedding_dim=args.embedding_dim or int(declared.get("embedding_dim", 64)),
+                    num_layers=(
+                        args.num_layers
+                        if args.num_layers is not None
+                        else int(declared.get("num_layers", 2))
+                    ),
+                    learning_rate=(
+                        args.learning_rate
+                        if args.learning_rate is not None
+                        else float(declared.get("learning_rate", 0.005))
+                    ),
+                    regularization=(
+                        args.regularization
+                        if args.regularization is not None
+                        else float(declared.get("regularization", 1e-4))
+                    ),
+                    batch_size=args.batch_size or int(declared.get("batch_size", 8192)),
+                    max_epochs=args.epochs or int(declared.get("max_epochs", 30)),
+                    negatives_per_positive=(
+                        args.negatives_per_positive
+                        or int(declared.get("negatives_per_positive", 3))
+                    ),
+                    evaluation_user_batch_size=int(declared.get("evaluation_user_batch_size", 256)),
+                    seed=seed,
+                )
+                model, fit_measurement = fit_lightgcn(
+                    dataset, fit_splits, model_config, device=args.device
+                )
+                configuration = model_config.to_dict()
+                device = model.device
+            elif args.model == SASREC:
+                from omnirank.models.sasrec import SASRecConfig
+                from omnirank.retrieval.runner import fit_sasrec
+
+                model_config = SASRecConfig(
+                    maximum_sequence_length=(
+                        args.maximum_sequence_length
+                        or int(declared.get("maximum_sequence_length", 50))
+                    ),
+                    embedding_dim=args.embedding_dim or int(declared.get("embedding_dim", 64)),
+                    num_blocks=args.num_blocks or int(declared.get("num_blocks", 2)),
+                    num_heads=args.num_heads or int(declared.get("num_heads", 2)),
+                    dropout=(
+                        args.dropout
+                        if args.dropout is not None
+                        else float(declared.get("dropout", 0.2))
+                    ),
+                    learning_rate=(
+                        args.learning_rate
+                        if args.learning_rate is not None
+                        else float(declared.get("learning_rate", 1e-3))
+                    ),
+                    batch_size=args.batch_size or int(declared.get("batch_size", 512)),
+                    max_epochs=args.epochs or int(declared.get("max_epochs", 15)),
+                    negatives_per_positive=(
+                        args.negatives_per_positive
+                        or int(declared.get("negatives_per_positive", 1))
+                    ),
+                    evaluation_user_batch_size=int(declared.get("evaluation_user_batch_size", 256)),
+                    seed=seed,
+                )
+                model, fit_measurement = fit_sasrec(
+                    dataset,
+                    fit_splits,
+                    model_config,
+                    processed_root=Path(dataset_config.processed_dir),
+                    device=args.device,
+                )
+                configuration = model_config.to_dict()
+                device = model.device
             else:
                 from omnirank.models.baselines.bpr import BPRConfig
 

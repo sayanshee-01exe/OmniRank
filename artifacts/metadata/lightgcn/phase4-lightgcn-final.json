@@ -1,0 +1,29 @@
+{
+  "artifact_path": "artifacts/models/pixelrec50k/lightgcn/phase4-lightgcn-final",
+  "configuration_hash": "aade728eb36f2fc95ad3ceb29b844baf8a07a5699a1382e5dc69209a0ca2567a",
+  "created_at": "2026-08-24T23:53:54.572626Z",
+  "feature_version": "phase3-raw-interactions",
+  "format_version": 1,
+  "framework_version": {
+    "torch": "2.13.0"
+  },
+  "git_commit": "2bbfbbe51cdd120e7fd6baae115a1eb4e192ba60",
+  "id_mapping_fingerprints": {
+    "item": "235fcff3343a651150e8f220bfebc9bdb986e78ab47b80c3d025a8259048bc3c"
+  },
+  "metrics": {
+    "test_coverage@20": 0.431901,
+    "test_ndcg@20": 0.006107501083527372,
+    "test_novelty@20": 14.307992,
+    "test_recall@20": 0.01478
+  },
+  "model_name": "lightgcn",
+  "model_type": "retrieval_model",
+  "model_version": "phase4-lightgcn-final",
+  "notes": "stage=final | fit_splits=train+validation | protocol=full_catalogue | trained_on_device=mps | artifact_sha256=da1986eca664ef543b2226cdc33fe73e1f4c43473a5337c84983757cb27d523f | item_mapping_checksum=235fcff3343a651150e8f220bfebc9bdb986e78ab47b80c3d025a8259048bc3c | split_version=1 | mapping_version=1 | dataset_manifest=9d1eabb7977d24ac | python=3.11.15",
+  "python_version": "3.11.15",
+  "random_seed": 42,
+  "required_index_version": 1,
+  "supported_device": "any",
+  "training_data_version": "pixelrec50k@v1"
+}

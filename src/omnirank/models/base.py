@@ -13,8 +13,14 @@ shared ``fit``-then-``recommend`` state machine (``_fitted``) and the
 ``save``/``load`` round-trip are behaviour every implementation needs and none
 should reimplement.
 
-PHASE 1 STATUS: interfaces only. No concrete generator or ranker exists yet -
-see ``docs/phase_reports/phase_01_report.md`` for what lands when.
+PHASE 4 STATUS: :class:`CandidateGenerator` has five implementations --
+popularity and BPR matrix factorization (Phase 3), LightGCN and SASRec
+(Phase 4), and the composite ``omnirank.retrieval.blended.BlendedRetriever``.
+:class:`Ranker` still has none; it lands in Phase 6. The interface has not been
+widened for any of them (ADR-001): the memory-bounded ``recommend_batch`` the
+evaluation harness uses is a separate protocol, deliberately not a method here,
+because a generator that will never be evaluated in bulk should not have to
+implement it.
 """
 
 from __future__ import annotations

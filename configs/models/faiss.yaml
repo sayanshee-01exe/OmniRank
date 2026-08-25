@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------------------
+# FAISS vector index configuration (Phase 4). See ADR-004 and ADR-006.
+#
+# The index backend and metric for serving live in retrieval.yaml under
+# `models.index`. This file configures index *builds* and the benchmark.
+# ---------------------------------------------------------------------------
+index:
+  # flat_ip is exact. It is the correctness reference every approximate index is
+  # checked against, and at 69,347 items x 128 dimensions it is also fast enough
+  # to serve, so nothing is traded away by defaulting to it.
+  type: flat_ip
+  metric: inner_product
+  # Bumped when the build procedure changes in a way that makes an old index
+  # incomparable. Enforced against artifact metadata at load.
+  index_version: 1
+
+  # Retrieving k and then removing a user's seen items returns fewer than k. The
+  # index over-retrieves instead, growing the buffer geometrically and capping
+  # it, so a user who has seen most of the catalogue terminates with a short
+  # list rather than looping forever.
+  oversampling_factor: 2
+  maximum_search_multiplier: 16
+
+benchmark:
+  # Approximate types are measured against flat_ip, not against each other: a
+  # recall number relative to another approximation says nothing about whether
+  # either is right.
+  candidates:
+    - type: flat_ip
+    - type: hnsw
+      build_parameters:
+        M: 32
+        efConstruction: 200
+        efSearch: 64
+    - type: ivf_flat
+      build_parameters:
+        nlist: 256
+        nprobe: 16
+  k_values: [10, 20, 100]
+  query_users: 5000
+  seed: 42
+
+sources:
+  # Which models' embeddings get indexed. Both are collaborative, so both
+  # indexes cover only items seen during fitting.
+  - model: lightgcn
+    embeddings: item
+  - model: sasrec
+    embeddings: item
+
+notes:
+  - >-
+    An index built with the wrong metric, or over a transposed matrix, still
+    returns k neighbours with plausible scores for every query. Nothing raises.
+    That is why every index is checked against exact brute force rather than
+    inspected for reasonableness.
+  - >-
+    Index metadata records the model name, model version, embedding checksum and
+    item mapping checksum. Loading an index against a model it was not built
+    from is refused (ADR-006): a mismatched index returns confident nonsense,
+    and every recommended id would resolve to the wrong item.
+  - >-
+    An index built from a model's item embeddings inherits that model's
+    catalogue. Items absent from fitting are absent from the index, and no
+    cold-start capability is implied by adding one.

@@ -1,0 +1,49 @@
+# ---------------------------------------------------------------------------
+# SASRec experimental configuration (Phase 4).
+#
+# Search space and defaults for the sequential model. As with lightgcn.yaml,
+# this is not the serving configuration and is not merged into AppConfig.
+# ---------------------------------------------------------------------------
+sasrec:
+  maximum_sequence_length: 50
+  embedding_dim: 64
+  num_blocks: 2
+  num_heads: 2
+  dropout: 0.2
+  learning_rate: 0.001
+  batch_size: 512
+  negatives_per_positive: 1
+  max_epochs: 15
+  early_stopping_patience: 10
+  evaluation_user_batch_size: 256
+  seed: 42
+
+search_space:
+  # Sequence length is the axis with the clearest prior effect on a short-video
+  # corpus, where sessions are long and interest drifts within them.
+  maximum_sequence_length: [20, 50]
+  embedding_dim: [64]
+
+notes:
+  - >-
+    The grid is short because it is affordable, not because the space is small.
+    Measured on this hardware, a SASRec epoch costs roughly ten times a LightGCN
+    epoch (103s at L=50/d=64 against 11s at d=64/L=2), so the full staged search
+    across folds and seeds that LightGCN receives is not runnable in the same
+    budget. What was actually run is recorded in the Phase 4 report; the
+    unexplored axes - num_blocks, num_heads, dropout, learning_rate - are listed
+    there as a known limitation rather than quietly omitted.
+  - >-
+    padding_id is num_items, one past the last valid internal id. Reusing 0
+    would collide with a real item, and the Phase 2 global mappings are not
+    altered to make room. Padding is masked in attention, excluded from the
+    loss, and removed from the scoring matrix so it can never be recommended.
+  - >-
+    Attention is causal: position t attends to positions <= t only. If it could
+    see ahead the model would learn to read the answer out of its own input, and
+    every offline metric would improve while the model became useless. Nothing
+    in the loss curve reveals that, so it is asserted by a test.
+  - >-
+    Training uses sampled binary cross-entropy over next-item positions rather
+    than a full softmax: a 69,347-way softmax at every one of up to 50 positions
+    across 776k sequences is not practical.

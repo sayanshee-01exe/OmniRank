@@ -8,7 +8,10 @@ Two contracts live here:
   generators query. FAISS first (ADR-004); the interface exists so that moving
   to pgvector or a managed service later touches one file.
 
-PHASE 1 STATUS: contracts only. Both land in Phase 2-3.
+PHASE 4 STATUS: both contracts are implemented.
+:class:`CandidateAggregator` has three concrete strategies in
+``omnirank.retrieval.aggregation``; :class:`VectorIndex` is implemented by
+``omnirank.retrieval.faiss_index.FaissVectorIndex``.
 """
 
 from __future__ import annotations
@@ -26,9 +29,15 @@ from omnirank.models.base import Candidate
 class AggregationResult:
     """Merged candidates plus a per-source audit trail.
 
-    ``contributions`` records how many candidates each generator supplied
-    *after* deduplication. It is the diagnostic that answers "why did recall
-    drop" when one generator silently stops producing.
+    ``contributions`` records, per generator, how many of the *emitted*
+    candidates it nominated. It is the diagnostic that answers "why did recall
+    drop" when one generator silently stops producing -- so it counts what
+    reached the ranker, not what was offered and then truncated away.
+
+    A shared item credits every generator that nominated it, so the total can
+    exceed the number of candidates. That excess measures overlap between
+    generators, which is worth reading on its own: sources that agree
+    completely add no coverage.
     """
 
     candidates: tuple[Candidate, ...]

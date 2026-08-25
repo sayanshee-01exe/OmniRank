@@ -1,0 +1,54 @@
+# ---------------------------------------------------------------------------
+# LightGCN experimental configuration (Phase 4).
+#
+# This file is the *search space and defaults* for LightGCN experiments. It is
+# not the serving configuration: the configuration selected on validation is
+# written to reports/metrics/phase_04/selected_configuration.json by
+# scripts/compare_retrievers.py and mirrored into phase4_selected.yaml.
+#
+# Not merged into the AppConfig tree. Loaded directly by the experiment CLI, so
+# adding an axis here does not require a schema change.
+# ---------------------------------------------------------------------------
+lightgcn:
+  # LightGCN removes feature transformation and non-linearity from GCN; the only
+  # learned parameters are the base embeddings. Propagation is parameter-free.
+  embedding_dim: 128
+  num_layers: 2
+  learning_rate: 0.005
+  regularization: 0.0001
+  batch_size: 8192
+  negatives_per_positive: 3
+  max_epochs: 30
+  early_stopping_patience: 10
+  evaluation_user_batch_size: 256
+  seed: 42
+
+search_space:
+  # num_layers is the axis that matters. It is the only thing separating
+  # LightGCN from the Phase 3 matrix factorization, so a search that omitted it
+  # would not be measuring the graph at all.
+  #
+  # 0 is included deliberately: with no propagation the model *is* matrix
+  # factorization trained by the same code, on the same data, with the same
+  # objective. That makes it a controlled ablation rather than a cross-codebase
+  # comparison, so any gain at 1+ layers is attributable to propagation and not
+  # to an implementation difference.
+  num_layers: [0, 1, 2, 3]
+  # Held fixed at the Phase 3 selected width so the comparison isolates the
+  # graph rather than confounding it with capacity.
+  embedding_dim: [128]
+
+notes:
+  - >-
+    Embedding dimension is not searched here. Phase 3 recorded that BPR's NDCG@20
+    was still rising with embedding_dim when its search stopped, so d256 is the
+    best configuration searched rather than a demonstrated optimum. Widening
+    LightGCN while that is unresolved would confound the two effects.
+  - >-
+    Nodes are laid out [users | items] in one adjacency matrix, and the graph
+    checksum covers the edge set. A model whose checksum does not match the
+    graph it is asked to serve is refused: propagated embeddings encode the
+    adjacency they were trained on.
+  - >-
+    LightGCN is purely collaborative. It has no representation for an item that
+    was never interacted with during fitting, and makes no cold-start claim.

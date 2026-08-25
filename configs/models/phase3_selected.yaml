@@ -1,0 +1,48 @@
+# ---------------------------------------------------------------------------
+# Phase 3 SELECTED configuration.
+#
+# Generated from reports/metrics/phase_03/selected_configuration.json, which
+# was locked before any test metric was read. This file records what was
+# actually chosen; `retrieval.yaml` holds generic development defaults and is
+# a different thing entirely. The three layers are:
+#
+#   configs/models/retrieval.yaml        generic defaults - small and fast
+#   configs/models/phase3_selected.yaml  what Phase 3 selected on validation
+#   configs/models/{lightgcn,sasrec,aggregation,faiss}.yaml
+#                                        Phase 4 search space and defaults
+#
+# Consumed by `scripts/train.py --from-selection` and
+# `scripts/compare_retrievers.py`.
+#
+# DO NOT HAND-EDIT. Re-select, then run:
+#     python scripts/generate_selected_config.py
+# ---------------------------------------------------------------------------
+models:
+  candidate_generators:
+    popularity:
+      enabled: false
+      phase: 3
+      top_k: 200
+      variant: time_decay
+      half_life_days: 45
+
+    matrix_factorization:
+      enabled: false
+      phase: 3
+      top_k: 200
+      implementation: bpr
+      embedding_dim: 256
+      learning_rate: 0.005
+      regularization: 0.0001
+      batch_size: 8192
+      epochs: 80
+      negatives_per_positive: 3
+      evaluation_user_batch_size: 1024
+      seed: 42
+
+# Validation metrics recorded at selection time, for provenance only. These
+# are NOT test metrics: Phase 3's test benchmark reversed this ranking. See
+# docs/phase_reports/phase_03_report.md section 23.
+#
+#   popularity            validation ndcg@20 = 0.00215
+#   matrix_factorization  validation ndcg@20 = 0.00339

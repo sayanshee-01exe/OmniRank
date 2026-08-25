@@ -43,12 +43,19 @@ baseline = [
   "omnirank[data]",
   "torch>=2.3",
 ]
-# Full modelling stack for Phase 4+. Never imported at package import time.
-ml = [
+# Phase 4 retrieval: graph and sequential models plus the vector index. FAISS is
+# the only addition over `baseline` - LightGCN and SASRec are written in torch
+# directly rather than pulling in PyTorch Geometric or RecBole, so there is no
+# second model framework to keep in sync.
+retrieval = [
   "omnirank[baseline]",
+  "faiss-cpu>=1.8",
+]
+# Full modelling stack for Phase 5+. Never imported at package import time.
+ml = [
+  "omnirank[retrieval]",
   "sentence-transformers>=3.0",
   "lightgbm>=4.3",
-  "faiss-cpu>=1.8",
   "scikit-learn>=1.5",
   "mlflow>=2.14",
   "dvc>=3.51",

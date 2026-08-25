@@ -76,6 +76,32 @@ out — the gain is small and the model is well into fitting the training data.
 The grid runs at 30 epochs to **rank** configurations, since relative ordering is
 what selection needs, and the selected configuration is then trained longer.
 
+## When the budget picks the winner
+
+Phase 4 added a case the Phase 3 rules did not cover: two models given
+*different* epoch budgets, because one costs ten times the other per epoch.
+
+LightGCN ran 30 epochs at 11-20 s each. SASRec ran 15 at 103-120 s each. SASRec
+scored lower — and its training loss was still falling roughly 5% per epoch at
+the cut-off, with no plateau. That is the same signature Phase 3 saw on BPR
+before extending its search, where extending moved BPR from 0.00180 to 0.00339
+and reversed its ranking against popularity.
+
+The rule this establishes: **before comparing two models, check whether each one
+finished.** A ranking between a converged model and an under-trained one is a
+statement about the budget, not the models, and reporting it as a model result
+is the same error as tuning the protocol until the number improves — it just
+looks more like diligence.
+
+The check is cheap and mechanical:
+
+- Is training loss still falling materially at the last epoch?
+- Is the validation metric still improving at the largest budget searched?
+
+If either is yes, the search is unfinished. Either extend it, or report the
+comparison as budget-limited and say so explicitly. Do not present it as a
+finding about model quality.
+
 ## If the personalised model loses
 
 Then that is the result, and it gets reported

@@ -39,21 +39,50 @@ class TestImportIntegrity:
     def test_every_module_imports(self, module_name):
         importlib.import_module(module_name)
 
-    def test_only_bpr_requires_the_modelling_extra(self):
-        """Everything except the BPR module must import without torch.
+    def test_importing_the_package_pulls_no_heavy_dependency(self):
+        """Importing any module must not drag in faiss, lightgbm, or friends.
 
         Popularity is the terminal stage of the serving fallback chain and the
-        evaluator scores every model, so both have to work on a lightweight
-        install. `models.baselines.bpr` is the single documented exception - it
-        is imported lazily by the runner and by the CLIs.
+        evaluator scores every model, so a lightweight install has to work. The
+        torch-backed models (`baselines.bpr`, `lightgcn`, `sasrec`) are the
+        documented exceptions and are imported lazily by the runner and CLIs;
+        they are skipped here rather than being allowed to pull torch in.
+
+        FAISS is checked too, and it is the interesting case: the vector index
+        module must import fine without it, because `_require_faiss` defers the
+        import to first use.
+
+        Run in a subprocess, for the same reason the next test is: this pytest
+        session has already imported faiss and torch for other suites, so
+        asserting against the in-process `sys.modules` would test the run order
+        rather than the package.
         """
-        heavy = {"faiss", "lightgbm", "sentence_transformers", "mlflow", "dvc"}
-        torch_only = "omnirank.models.baselines.bpr"
-        for module_name in ALL_MODULES:
-            if module_name == torch_only:
-                continue
-            importlib.import_module(module_name)
-        assert heavy.isdisjoint(sys.modules), sorted(heavy & set(sys.modules))
+        skip = {
+            "omnirank.models.baselines.bpr",
+            "omnirank.models.lightgcn",
+            "omnirank.models.lightgcn.model",
+            "omnirank.models.sasrec",
+            "omnirank.models.sasrec.model",
+            "omnirank.retrieval.blended",
+            "omnirank.retrieval.runner",
+        }
+        modules = [name for name in ALL_MODULES if name not in skip]
+        script = (
+            "import importlib, sys\n"
+            f"for name in {modules!r}:\n"
+            "    importlib.import_module(name)\n"
+            "heavy = {'faiss', 'torch', 'lightgbm', 'sentence_transformers', 'mlflow', 'dvc'}\n"
+            "print(sorted(heavy & set(sys.modules)))\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+            timeout=180,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "[]", result.stdout
 
     def test_evaluation_and_popularity_do_not_pull_torch(self):
         """Asserted in a subprocess, because this session may already hold torch."""

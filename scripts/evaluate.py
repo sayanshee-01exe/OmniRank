@@ -43,6 +43,7 @@ from omnirank.models.baselines.runner import (
     POPULARITY,
     run_experiment,
 )
+from omnirank.retrieval.runner import LIGHTGCN, SASREC
 
 CONFIG_ERROR_EXIT = 2
 EVALUATION_ERROR_EXIT = 3
@@ -61,7 +62,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--model", required=True, choices=(POPULARITY, MATRIX_FACTORIZATION))
+    parser.add_argument(
+        "--model",
+        required=True,
+        choices=(POPULARITY, MATRIX_FACTORIZATION, LIGHTGCN, SASREC),
+    )
     parser.add_argument("--version", required=True)
     parser.add_argument("--split", default="validation", choices=tuple(BOUNDARY_FOR_SPLIT))
     parser.add_argument(
@@ -125,6 +130,14 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if args.model == POPULARITY:
                 model = PopularityRecommender.load(artifact_dir)
+            elif args.model == LIGHTGCN:
+                from omnirank.models.lightgcn import LightGCN
+
+                model = LightGCN.load(artifact_dir, device=args.device)
+            elif args.model == SASREC:
+                from omnirank.models.sasrec import SASRec
+
+                model = SASRec.load(artifact_dir, device=args.device)
             else:
                 from omnirank.models.baselines.bpr import BPRMatrixFactorization
 

@@ -353,11 +353,26 @@ class GeneratorConfig(_Section):
 
 
 class AggregationConfig(_Section):
-    """How per-generator candidate lists are merged. Component 11."""
+    """How per-generator candidate lists are merged. Component 11.
 
-    strategy: Literal["weighted_round_robin", "score_union"] = "weighted_round_robin"
+    The strategy names mirror the constants in
+    ``omnirank.retrieval.aggregation``; they are repeated as literals rather
+    than imported because the config layer must stay importable without the
+    retrieval extra installed.
+    """
+
+    strategy: Literal[
+        "weighted_round_robin", "reciprocal_rank_fusion", "normalized_score_union"
+    ] = "weighted_round_robin"
     max_candidates: int = Field(default=1000, ge=1)
     source_weights: dict[str, float] = Field(default_factory=dict)
+    #: Damping constant for reciprocal rank fusion. Must be positive: at zero,
+    #: a source's rank-1 item would dominate every fused sum.
+    rrf_constant: float = Field(default=60.0, gt=0.0)
+    normalization: Literal["min_max", "z_score", "rank_percentile"] = "rank_percentile"
+    #: Depth multiplier applied before fusion. At 1, fusing top-k lists and
+    #: truncating back to k under-fills whenever the sources agree.
+    over_retrieval_factor: int = Field(default=3, ge=1)
 
 
 class RankerConfig(_Section):

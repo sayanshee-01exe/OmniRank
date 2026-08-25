@@ -127,7 +127,7 @@ the method.
 |---|---|
 | **Component** | 8 — Model training |
 | **Contract** | `omnirank.models.base.CandidateGenerator` · `Ranker` |
-| **Status** | ✅ Popularity + BPR implemented (Phase 3); LightGCN/SASRec Phase 4 |
+| **Status** | ✅ Popularity + BPR (Phase 3); LightGCN + SASRec + aggregation + FAISS (Phase 4) |
 
 Training is model-specific; the *contract* is not. Every generator implements
 `fit` / `recommend` / `score` / `save` / `load`, which is what lets the aggregator

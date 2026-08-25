@@ -20,7 +20,7 @@ A production-oriented, multi-stage, multimodal recommendation system.
 recommendation dataset.
 
 Chosen because it is genuinely multimodal (cover image + title + category +
-description per item, which the Phase 4 two-tower retriever needs), has **real
+description per item, which the Phase 5 two-tower retriever needs), has **real
 Unix timestamps** spanning 2012–2022 rather than only an implied ordering, fits
 a laptop at 51 MB of CSV, and is honest about what it measures — one implicit
 engagement signal, not a synthetic multi-event taxonomy.
@@ -53,12 +53,12 @@ User and item data
 Candidate generation
 ├── Popularity fallback              ✅ Phase 3
 ├── Matrix factorization baseline    ✅ Phase 3
-├── LightGCN collaborative retrieval (Phase 4)
-├── Multimodal two-tower retrieval   (Phase 5)
-└── SASRec sequential retrieval      (Phase 4)
+├── LightGCN collaborative retrieval ✅ Phase 4
+├── SASRec sequential retrieval      ✅ Phase 4
+└── Multimodal two-tower retrieval   (Phase 5)
         │
         ▼
-Candidate aggregation and deduplication   (Phase 4)
+Candidate aggregation and deduplication   ✅ Phase 4
         │
         ▼
 Ranking-feature generation                (Phase 6)
@@ -111,8 +111,12 @@ Detailed diagrams: [`docs/architecture/system_architecture.md`](docs/architectur
 | **Popularity baseline (global + time-decay)** | ✅ Implemented | `src/omnirank/models/baselines/popularity.py` |
 | **BPR matrix factorization** | ✅ Implemented | `src/omnirank/models/baselines/bpr.py` |
 | **Negative sampling** | ✅ Implemented | `src/omnirank/models/baselines/negative_sampling.py` |
-| LightGCN, SASRec, two-tower, ranker, reranker | 📋 Interface only | `src/omnirank/models/base.py` |
-| Vector index (FAISS) | 📋 Interface only | `src/omnirank/retrieval/base.py` |
+| **LightGCN graph retrieval** | ✅ Implemented | `src/omnirank/models/lightgcn/` |
+| **SASRec sequential retrieval** | ✅ Implemented | `src/omnirank/models/sasrec/` |
+| **Candidate aggregation (3 strategies)** | ✅ Implemented | `src/omnirank/retrieval/aggregation.py` |
+| **Vector index (FAISS)** | ✅ Implemented | `src/omnirank/retrieval/faiss_index.py` |
+| **Rolling temporal validation** | ✅ Implemented | `src/omnirank/data/rolling.py` |
+| Two-tower, ranker, reranker | 📋 Interface only | `src/omnirank/models/base.py` |
 | Database and cache clients | 📋 Protocol only | `src/omnirank/{database,cache}/` |
 | Prometheus / Grafana, Kubernetes, streaming | ❌ Deferred | — |
 
@@ -120,8 +124,8 @@ Detailed diagrams: [`docs/architecture/system_architecture.md`](docs/architectur
 
 ## Planned recommendation models
 
-Popularity and BPR are implemented (Phase 3). The rest are listed with the phase that delivers them
-and the baseline each must beat ([ADR-007](docs/adr/ADR-007-baselines-before-advanced-models.md)).
+Popularity and BPR (Phase 3) and LightGCN and SASRec (Phase 4) are implemented. The rest are listed
+with the phase that delivers them and the baseline each must beat ([ADR-007](docs/adr/ADR-007-baselines-before-advanced-models.md)).
 
 | Model | Kind | Phase | Must beat |
 |---|---|---|---|
@@ -129,6 +133,7 @@ and the baseline each must beat ([ADR-007](docs/adr/ADR-007-baselines-before-adv
 | BPR matrix factorization | collaborative | 3 | popularity |
 | LightGCN | graph collaborative | 4 | matrix factorization |
 | SASRec | sequential | 4 | matrix factorization |
+| Blended retriever (RRF and friends) | fusion | 4 | its own best single source |
 | Two-tower multimodal | content + collaborative | 5 | LightGCN on cold items |
 | LightGBM LambdaRank | learning-to-rank | 6 | best single retriever |
 | MMR | diversity reranking | 6 | ranker, on diversity at equal NDCG |
@@ -148,8 +153,8 @@ omnirank/
 │   │   └── ...         #   cleaning, filtering, mapping, splitters, leakage,
 │   │                   #   sequences, statistics, slices, profiling, manifest, pipeline
 │   ├── features/       # feature store + sequence builder contracts
-│   ├── models/         # CandidateGenerator / Ranker interfaces + reserved model packages
-│   ├── retrieval/      # aggregation + vector index contracts
+│   ├── models/         # CandidateGenerator / Ranker interfaces, baselines, lightgcn, sasrec
+│   ├── retrieval/      # aggregation strategies, blended retriever, FAISS index, diagnostics
 │   ├── ranking/        # ranking-feature contract
 │   ├── reranking/      # post-ranking filters + reranker contracts
 │   ├── evaluation/     # evaluator + ground-truth contracts
@@ -346,10 +351,17 @@ final       fit: train+validation   targets: test        (read once)
 ```
 
 Hyperparameters are chosen on validation, written to
-`reports/metrics/phase_03/selected_configuration.json`, and only then is test
-touched — `compare_baselines.py --stage final` refuses to run without that file.
+`reports/metrics/phase_0{3,4}/selected_configuration.json`, and only then is test
+touched — both `compare_baselines.py --stage final` and
+`compare_retrievers.py --stage final` refuse to run without that file.
 
-Details: [`docs/evaluation/`](docs/evaluation/) and [`docs/models/`](docs/models/).
+Phase 4 added a second discipline alongside it: **before comparing two models,
+check whether each one finished.** A ranking between a converged model and one
+still improving at its epoch budget is a statement about the budget, not the
+models. See [`docs/models/model_selection.md`](docs/models/model_selection.md).
+
+Details: [`docs/evaluation/`](docs/evaluation/), [`docs/models/`](docs/models/)
+and [`docs/retrieval/`](docs/retrieval/).
 
 ## Testing
 
@@ -370,7 +382,7 @@ Tests require no GPU, no network, no database, and no downloaded model weights.
 | **1** | Architecture and foundation: structure, config, contracts, artifact registry, API skeleton, docs, tests | ✅ **Complete** |
 | **2** | PixelRec50K data engineering: loaders, cleaning, filtering, ordered splitting, leakage validation, collaborative/graph/sequential datasets, feature alignment, slices, manifest | ✅ **Complete** |
 | **3** | Offline evaluation, popularity and matrix-factorization baselines | ✅ **Complete** |
-| **4** | LightGCN, SASRec and candidate aggregation | Next |
+| **4** | LightGCN, SASRec, candidate aggregation, FAISS index | Complete |
 | **5** | Multimodal two-tower retrieval | Planned |
 | **6** | Learning-to-rank, MMR and online serving | Planned |
 | **7** | Monitoring and online experimentation | Planned |
@@ -389,6 +401,7 @@ Phase reports: [Phase 1](docs/phase_reports/phase_01_report.md) · [Phase 2](doc
 | [006](docs/adr/ADR-006-versioned-artifacts.md) | Versioned model and index compatibility |
 | [007](docs/adr/ADR-007-baselines-before-advanced-models.md) | Baselines before advanced models |
 | [008](docs/adr/ADR-008-lightgbm-over-catboost.md) | LightGBM over CatBoost for ranking |
+| [009](docs/adr/ADR-009-faiss-torch-openmp-coexistence.md) | Accepting `KMP_DUPLICATE_LIB_OK` so FAISS and PyTorch share a process |
 
 ## License
 

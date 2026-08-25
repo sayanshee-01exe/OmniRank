@@ -1,10 +1,15 @@
-"""Artifact registration for the Phase 3 baselines.
+"""Artifact registration for the offline retrieval models.
 
-Wraps the Phase 1 :class:`~omnirank.artifacts.registry.ArtifactRegistry` so both
-baselines record the same manifest fields. Registration is deliberately
+Wraps the Phase 1 :class:`~omnirank.artifacts.registry.ArtifactRegistry` so
+every model records the same manifest fields. Registration is deliberately
 non-clobbering: re-registering a version requires an explicit flag, because
 silently rewriting a version another run may already have evaluated is how
 "the metrics changed but the model didn't" happens.
+
+Named for the Phase 3 baselines it was written for; Phase 4's LightGCN and
+SASRec register through it unchanged, which is the point -- a model with its own
+registration path could record a different set of fields and quietly become
+incomparable.
 """
 
 from __future__ import annotations
@@ -58,7 +63,7 @@ def register_baseline(
     extra_notes: str | None = None,
     overwrite: bool = False,
 ) -> ArtifactMetadata:
-    """Register a fitted baseline with the full Phase 3 manifest."""
+    """Register a fitted retrieval model with the full manifest."""
     supported = {
         "cpu": SupportedDevice.CPU,
         "mps": SupportedDevice.MPS,

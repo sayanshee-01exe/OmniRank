@@ -113,3 +113,61 @@ jobs:
       # No PixelRec download, no GPU, no full-dataset training.
       - name: Fixture training and evaluation integration test
         run: pytest tests/integration/test_baseline_pipeline.py -q
+
+  retrieval-models:
+    name: retrieval models (torch + faiss)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      # `retrieval` is `baseline` plus faiss-cpu. Still not
+      # sentence-transformers, lightgbm or mlflow, none of which Phase 4 needs.
+      - name: Install project with the retrieval extra
+        run: uv pip install --system -e ".[retrieval,dev]"
+
+      # The normalisation constants and layer averaging are asserted against
+      # hand-computed values, so a propagation change that alters the graph
+      # maths fails here rather than showing up as a quietly worse model.
+      - name: LightGCN tests
+        run: pytest tests/unit/models/test_lightgcn.py -q
+
+      # Causality is the assertion that matters: a future-leaking transformer
+      # trains faster and scores better on every offline metric, so nothing
+      # else in this suite would catch it.
+      - name: SASRec tests
+        run: pytest tests/unit/models/test_sasrec.py -q
+
+      # Fused scores are checked against hand arithmetic, and ordering is
+      # checked to be independent of source insertion order. Retrieval output
+      # becomes ranker training data in Phase 6; a non-deterministic ordering
+      # would make every downstream experiment irreproducible.
+      - name: Aggregation and diagnostics tests
+        run: pytest tests/unit/retrieval/test_aggregation.py \
+                    tests/unit/retrieval/test_blended.py \
+                    tests/unit/retrieval/test_diagnostics.py \
+                    tests/unit/retrieval/test_runner.py -q
+
+      # Flat indexes are checked against exact brute force in both set and
+      # order. This also guards the OpenMP coexistence workaround in
+      # `_require_faiss`: silent numerical corruption is precisely what these
+      # tests fail on.
+      - name: FAISS index tests
+        run: pytest tests/unit/retrieval/test_faiss_index.py -q
+
+      # Offset 1 is the official test target and must never enter a selection
+      # fold. That failure is invisible at runtime, so it is asserted.
+      - name: Rolling temporal validation tests
+        run: pytest tests/unit/data/test_rolling.py -q
+
+      # Small, deterministic, CPU-only fixture training through the full
+      # retrieval path. No PixelRec download, no GPU, no full-dataset training.
+      - name: Fixture retrieval integration test
+        run: pytest tests/integration/test_retrieval_pipeline.py -q

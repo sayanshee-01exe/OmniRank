@@ -6,10 +6,13 @@ PIP     := uv pip
 VENV    := .venv
 
 .DEFAULT_GOAL := help
-.PHONY: help setup install install-baseline lint format typecheck test test-unit \
-        test-integration test-baseline check serve up down clean download-data \
-        prepare-data validate-data profile-data train-popularity train-mf \
-        evaluate-popularity evaluate-mf compare-baselines
+.PHONY: help setup install install-baseline install-retrieval lint format typecheck \
+        test test-unit test-integration test-baseline test-retrieval check serve up \
+        down clean download-data prepare-data validate-data profile-data \
+        train-popularity train-mf evaluate-popularity evaluate-mf compare-baselines \
+        train-lightgcn train-sasrec evaluate-lightgcn evaluate-sasrec \
+        build-lightgcn-index build-sasrec-index compare-retrievers \
+        compare-aggregation benchmark-index
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -28,6 +31,9 @@ install:  ## Reinstall the project (after dependency changes)
 
 install-baseline:  ## Install the baseline modelling extra (adds PyTorch)
 	$(PIP) install -e ".[baseline,dev]"
+
+install-retrieval:  ## Install the retrieval extra (adds FAISS on top of baseline)
+	$(PIP) install -e ".[retrieval,dev]"
 
 lint:  ## Ruff check
 	$(PYTHON) -m ruff check src tests scripts
@@ -51,6 +57,10 @@ test-integration:  ## Integration tests only
 test-baseline:  ## Evaluation + baseline model tests (needs the baseline extra)
 	$(PYTHON) -m pytest tests/unit/evaluation tests/unit/models \
 	    tests/integration/test_baseline_pipeline.py
+
+test-retrieval:  ## LightGCN, SASRec, aggregation and index tests (needs the retrieval extra)
+	$(PYTHON) -m pytest tests/unit/retrieval tests/unit/models/test_lightgcn.py \
+	    tests/unit/models/test_sasrec.py tests/unit/data/test_rolling.py
 
 check: lint typecheck test  ## Lint + typecheck + test (what CI runs)
 
@@ -87,6 +97,44 @@ evaluate-mf:  ## Evaluate the registered BPR model on validation
 compare-baselines:  ## Full Phase 3 comparison: selection, lock, final, reports
 	$(PYTHON) scripts/compare_baselines.py \
 	    --config-dir configs --data-config configs/data/pixelrec50k.yaml
+
+train-lightgcn:  ## Fit + register LightGCN (selection stage)
+	$(PYTHON) scripts/train.py --model lightgcn \
+	    --data-config configs/data/pixelrec50k.yaml \
+	    --stage selection --version phase4-lightgcn-selection
+
+train-sasrec:  ## Fit + register SASRec (selection stage)
+	$(PYTHON) scripts/train.py --model sasrec \
+	    --data-config configs/data/pixelrec50k.yaml \
+	    --stage selection --version phase4-sasrec-selection
+
+evaluate-lightgcn:  ## Evaluate the registered LightGCN model on validation
+	$(PYTHON) scripts/evaluate.py --model lightgcn \
+	    --version phase4-lightgcn-selection --split validation --protocol full
+
+evaluate-sasrec:  ## Evaluate the registered SASRec model on validation
+	$(PYTHON) scripts/evaluate.py --model sasrec \
+	    --version phase4-sasrec-selection --split validation --protocol full
+
+build-lightgcn-index:  ## Build a FAISS index over LightGCN item embeddings
+	$(PYTHON) scripts/build_index.py --model lightgcn \
+	    --version phase4-lightgcn-selection --index-type flat_ip --verify-exact
+
+build-sasrec-index:  ## Build a FAISS index over SASRec item embeddings
+	$(PYTHON) scripts/build_index.py --model sasrec \
+	    --version phase4-sasrec-selection --index-type flat_ip --verify-exact
+
+compare-retrievers:  ## Full Phase 4 comparison: selection, rolling, lock, final, reports
+	$(PYTHON) scripts/compare_retrievers.py \
+	    --config-dir configs --data-config configs/data/pixelrec50k.yaml
+
+compare-aggregation:  ## Fit every source once, then score each source and every blend
+	$(PYTHON) scripts/compare_aggregation.py \
+	    --config-dir configs --data-config configs/data/pixelrec50k.yaml --stage selection
+
+benchmark-index:  ## Measure every FAISS index type against exact search
+	$(PYTHON) scripts/benchmark_index.py \
+	    --model lightgcn --version phase4-lightgcn-final
 
 serve:  ## Run the API locally
 	$(PYTHON) scripts/serve.py
