@@ -43,8 +43,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_SOURCES = (
     "src/omnirank/models/two_tower/__init__.py",
     "src/omnirank/models/two_tower/config.py",
+    "src/omnirank/models/two_tower/dataset.py",
     "src/omnirank/models/two_tower/model.py",
     "src/omnirank/models/two_tower/losses.py",
+    "src/omnirank/models/two_tower/training.py",
+    "src/omnirank/models/two_tower/persistence.py",
+    "src/omnirank/models/two_tower/generator.py",
+    "src/omnirank/models/two_tower/catalogue.py",
+    "src/omnirank/retrieval/two_tower_index.py",
 )
 OPTIONAL_SOURCES = (
     "src/omnirank/models/two_tower/dataset.py",
@@ -68,6 +74,16 @@ REQUIRED_COMMANDS = (
 REQUIRED_EVIDENCE = (
     "docs/phase_reports/phase_05_report.md",
     "reports/metrics/phase_05/selected_configuration.json",
+)
+
+#: Measured outputs, not the documents describing them. Documentation presence
+#: is never treated as implementation completion.
+REQUIRED_METRICS = (
+    "reports/metrics/phase_05/feature_coverage.json",
+    "reports/metrics/phase_05/ablation_results.csv",
+    "reports/metrics/phase_05/two_tower_final_test_metrics.json",
+    "reports/metrics/phase_05/cold_start_metrics.csv",
+    "reports/metrics/phase_05/five_source_fusion_metrics.csv",
 )
 
 FEATURE_MANIFEST = "data/processed/pixelrec50k/features/multimodal_feature_manifest.json"
@@ -174,24 +190,45 @@ def check_model_class(result: GateResult) -> None:
         True,
         detail="exposed from omnirank.models.two_tower",
     )
+    # The network and the retrieval surface are separate, matching the
+    # SASRecNetwork/SASRec split the codebase already uses: the nn.Module knows
+    # how to encode, the CandidateGenerator knows how to retrieve.
+    try:
+        from omnirank.models.two_tower import TwoTowerRetriever
+
+        result.add(
+            "TwoTowerRetriever implements CandidateGenerator",
+            issubclass(TwoTowerRetriever, CandidateGenerator),
+            detail="required so fusion treats it like every other source",
+        )
+        retriever_surface = (
+            "recommend",
+            "recommend_batch",
+            "score",
+            "save",
+            "load",
+            "encode_users",
+            "encode_items",
+            "export_item_embeddings",
+            "build_query_embedding",
+        )
+        absent = [name for name in retriever_surface if not hasattr(TwoTowerRetriever, name)]
+        result.add(
+            "TwoTowerRetriever surface",
+            not absent,
+            detail="all present" if not absent else f"missing: {', '.join(absent)}",
+        )
+    except Exception as exc:
+        result.add(
+            "TwoTowerRetriever implements CandidateGenerator",
+            False,
+            detail=f"{type(exc).__name__}: {str(exc)[:160]}",
+        )
+
+    network_surface = ("encode_users", "encode_items", "forward", "similarity")
+    missing = [name for name in network_surface if not hasattr(MultimodalTwoTower, name)]
     result.add(
-        "MultimodalTwoTower implements CandidateGenerator",
-        issubclass(MultimodalTwoTower, CandidateGenerator),
-        detail="required so the ranker and fusion treat it like every other source",
-    )
-    required_methods = (
-        "fit",
-        "recommend",
-        "recommend_batch",
-        "score",
-        "save",
-        "load",
-        "item_embeddings",
-        "metadata",
-    )
-    missing = [name for name in required_methods if not hasattr(MultimodalTwoTower, name)]
-    result.add(
-        "MultimodalTwoTower interface surface",
+        "MultimodalTwoTower network surface",
         not missing,
         detail="all present" if not missing else f"missing: {', '.join(missing)}",
     )

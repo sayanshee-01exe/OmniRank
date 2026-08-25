@@ -207,13 +207,27 @@ class SASRecNetwork(torch.nn.Module):
 
         # Padding is masked in attention so it contributes nothing; combined with
         # the causal mask, a position sees only real, earlier items.
-        padding_mask = sequences == self.padding_id
         attention_mask = self.causal_mask(length, sequences.device)
+        # Deliberately no `src_key_padding_mask`.
+        #
+        # Sequences are left-padded, so early positions can attend only to
+        # padding. Combining a padding mask with the causal mask makes those
+        # rows *fully* masked, and a softmax over an all-masked row is NaN --
+        # which then propagates to every position through the residual and
+        # layer-norm path, including the final position inference reads.
+        #
+        # It is worse than it sounds: PyTorch's eval-mode fast path produces the
+        # NaN while the training path does not, so a model trains cleanly and
+        # then returns NaN scores only after `eval()`. Measured on the real
+        # 50-position encoder: a 3-item history gave NaN at all 50 positions in
+        # eval mode and finite values in train mode.
+        #
+        # Padding is excluded by construction instead: its embedding row is
+        # `padding_idx` and therefore exactly zero, the loss masks padded
+        # targets, and the causal mask still prevents any position from seeing
+        # the future. This is the standard SASRec formulation.
         for block in self.blocks:
-            hidden = cast(
-                "torch.Tensor",
-                block(hidden, src_mask=attention_mask, src_key_padding_mask=padding_mask),
-            )
+            hidden = cast("torch.Tensor", block(hidden, src_mask=attention_mask))
         return cast("torch.Tensor", self.final_norm(hidden))
 
     def score_items(self, hidden: torch.Tensor, item_ids: torch.Tensor) -> torch.Tensor:

@@ -180,3 +180,62 @@ jobs:
       # retrieval path. No PixelRec download, no GPU, no full-dataset training.
       - name: Fixture retrieval integration test
         run: pytest tests/integration/test_retrieval_pipeline.py -q
+
+  multimodal-retrieval:
+    name: multimodal two-tower retrieval
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      # `retrieval` already carries torch and faiss-cpu, which is everything the
+      # two-tower path needs. Training on published vectors requires no text or
+      # image encoder, so no sentence-transformers and no image libraries.
+      - name: Install project with the retrieval extra
+        run: uv pip install --system -e ".[retrieval,dev]"
+
+      # Padding must not collide with a real item, histories must precede their
+      # targets, and a batch's shapes must match the feature manifest.
+      - name: Two-tower dataset and tower tests
+        run: pytest tests/unit/models/two_tower/test_dataset.py \
+                    tests/unit/models/two_tower/test_towers.py -q
+
+      # In-batch softmax treats other rows' targets as negatives, and some of
+      # them are items the user already liked. The masking is what stops the
+      # loss training against known positives.
+      - name: Contrastive loss and training tests
+        run: pytest tests/unit/models/two_tower/test_training.py -q
+
+      # Identity travels with the weights: a model paired with the wrong mapping
+      # or feature store returns confident recommendations for the wrong items.
+      - name: Persistence and identity tests
+        run: pytest tests/unit/models/two_tower/test_persistence.py -q
+
+      # The retrieval surface, the catalogue, and the cold-item guarantee: an
+      # index whose catalogue quietly contained no cold items would still answer
+      # every query.
+      - name: Retriever, catalogue and embedding export tests
+        run: pytest tests/unit/models/two_tower/test_generator.py -q
+
+      # Exact FAISS must reproduce brute force in set and order. An index built
+      # with the wrong metric still returns k plausible neighbours.
+      - name: Two-tower FAISS exactness tests
+        run: pytest tests/unit/retrieval/test_two_tower_index.py -q
+
+      # The mandatory cold-item workflow: a target no collaborative model can
+      # reach, retrieved from content through a real index.
+      - name: Cold-item and five-source fusion integration
+        run: pytest tests/integration/test_two_tower_training.py \
+                    tests/integration/test_phase5_retrieval.py -q
+
+      # Invoked directly, not through a pipe: `python ... | tee` reports tee's
+      # exit status, so a failing validator would look like a passing job.
+      - name: Phase 5 completion gate
+        run: python scripts/validate_phase5.py --ci

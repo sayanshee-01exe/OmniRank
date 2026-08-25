@@ -46,7 +46,14 @@ from omnirank.models.baselines.runner import (
 from omnirank.retrieval.aggregation import build_aggregator
 from omnirank.retrieval.blended import BlendedRetriever
 from omnirank.retrieval.diagnostics import candidate_recall, source_overlap
-from omnirank.retrieval.runner import LIGHTGCN, SASREC, fit_lightgcn, fit_sasrec
+from omnirank.retrieval.runner import (
+    LIGHTGCN,
+    SASREC,
+    TWO_TOWER,
+    fit_lightgcn,
+    fit_sasrec,
+    fit_two_tower,
+)
 
 CONFIG_ERROR_EXIT = 2
 RUN_ERROR_EXIT = 3
@@ -54,6 +61,7 @@ RUN_ERROR_EXIT = 3
 PHASE_ROOT = REPORT_ROOT.parent / "phase_04"
 PHASE_3_SELECTION = REPORT_ROOT / "selected_configuration.json"
 PHASE_4_SELECTION = PHASE_ROOT / "selected_configuration.json"
+PHASE_5_SELECTION = REPORT_ROOT.parent / "phase_05" / "selected_configuration.json"
 AGGREGATION_CONFIG = Path("configs/models/aggregation.yaml")
 
 DIAGNOSTIC_DEPTHS = (20, 100, 300)
@@ -72,14 +80,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--sources",
         default="popularity,matrix_factorization,lightgcn,sasrec",
-        help="Comma-separated sources to fit.",
+        help="Comma-separated sources to fit. Add two_tower for five-source fusion.",
+    )
+    parser.add_argument(
+        "--subset-users",
+        type=int,
+        default=None,
+        help="Restrict two-tower training to the first N users (development).",
     )
     return parser.parse_args(argv)
 
 
 def _locked(model_name: str) -> dict[str, Any]:
     """Read a model's locked configuration from its phase's selection record."""
-    path = PHASE_4_SELECTION if model_name in (LIGHTGCN, SASREC) else PHASE_3_SELECTION
+    if model_name == TWO_TOWER:
+        path = PHASE_5_SELECTION
+    elif model_name in (LIGHTGCN, SASREC):
+        path = PHASE_4_SELECTION
+    else:
+        path = PHASE_3_SELECTION
     if not path.is_file():
         raise OmniRankError(
             f"No locked configuration for {model_name}. Run the selection and "
@@ -138,6 +157,46 @@ def _fit_sources(
                 processed_root=processed_root,
                 device=args.device,
             )
+        elif name == TWO_TOWER:
+            import numpy as np
+
+            from omnirank.models.two_tower import TwoTowerConfig, TwoTowerRetriever
+            from omnirank.retrieval.runner import load_item_tags, load_sequences
+
+            # The locked record stores the ablation label beside the
+            # hyperparameters; it is provenance, not a constructor argument.
+            settings = {k: v for k, v in locked.items() if k not in ("label", "seed")}
+            settings.setdefault("seed", 42)
+            (network, store, _), _ = fit_two_tower(
+                dataset,
+                fit_splits,
+                TwoTowerConfig(**settings),
+                processed_root=processed_root,
+                device=args.device,
+                subset_users=args.subset_users,
+            )
+            tags, _ = load_item_tags(processed_root, dataset.num_items)
+            sequences = load_sequences(processed_root, fit_splits)
+            if args.subset_users is not None:
+                sequences = sequences[sequences["internal_user_id"] < args.subset_users]
+            histories: dict[int, list[int]] = {}
+            warm = np.zeros(dataset.num_items, dtype=bool)
+            for user, history, target in zip(
+                sequences["internal_user_id"],
+                sequences["item_sequence"],
+                sequences["target_item"],
+                strict=True,
+            ):
+                combined = [*list(history), int(target)]
+                key = int(user)
+                if key not in histories or len(combined) > len(histories[key]):
+                    histories[key] = combined
+                warm[list(history)] = True
+                warm[int(target)] = True
+            model = TwoTowerRetriever.from_trained(
+                network, store, dataset, histories, warm, tags, device=args.device
+            )
+            model.export_item_embeddings()
         else:
             raise OmniRankError(f"Unknown source: {name}")
         fitted[name] = model

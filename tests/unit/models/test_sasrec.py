@@ -150,6 +150,42 @@ class TestCausality:
         assert torch.equal(first[:, :3, :], second[:, :3, :])
         assert (first[:, 3:, :] - second[:, 3:, :]).abs().max() > 1e-6
 
+    def test_a_mostly_padded_sequence_stays_finite_in_eval_mode(
+        self, network: SASRecNetwork
+    ) -> None:
+        """The regression that the causality tests walked straight past.
+
+        Sequences are left-padded, so early positions can attend only to
+        padding. Adding a key-padding mask on top of the causal mask makes those
+        rows fully masked, and a softmax over an all-masked row is NaN -- which
+        propagates to every position, including the final one inference reads.
+
+        It is nastier than an ordinary NaN because PyTorch's eval-mode fast path
+        produces it while the training path does not: the model trains cleanly,
+        the loss curve looks healthy, and it returns NaN scores only after
+        `eval()`. Measured on the real 50-position encoder before the fix, a
+        3-item history gave NaN at all 50 positions in eval mode.
+        """
+        network.eval()
+        short = torch.from_numpy(
+            encode_sequences([[1, 2, 3]], maximum_length=6, padding_id=network.padding_id)
+        )
+        with torch.no_grad():
+            hidden = network(short)
+        assert torch.isfinite(hidden).all()
+        assert torch.isfinite(hidden[:, -1, :]).all()
+
+    def test_a_fully_padded_sequence_stays_finite(self, network: SASRecNetwork) -> None:
+        """The limiting case: every position padded."""
+        network.eval()
+        empty = torch.full((1, 6), network.padding_id, dtype=torch.long)
+        with torch.no_grad():
+            assert torch.isfinite(network(empty)).all()
+
+    def test_padding_contributes_a_zero_embedding(self, network: SASRecNetwork) -> None:
+        """Padding is excluded by construction rather than by an attention mask."""
+        assert network.item_embedding.weight[network.padding_id].abs().sum() == 0.0
+
     def test_mask_blocks_exactly_the_strict_upper_triangle(self, network: SASRecNetwork) -> None:
         mask = network.causal_mask(4, torch.device("cpu"))
         assert mask.dtype == torch.bool

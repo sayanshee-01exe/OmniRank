@@ -20,8 +20,10 @@ CLIs, so a torch-free install still works.
 
 from __future__ import annotations
 
+from omnirank.models.two_tower.catalogue import RetrievalCatalogue, build_catalogue
 from omnirank.models.two_tower.config import TwoTowerConfig
 from omnirank.models.two_tower.dataset import TwoTowerBatch, TwoTowerTrainingDataset
+from omnirank.models.two_tower.generator import TwoTowerRetriever
 from omnirank.models.two_tower.losses import (
     ContrastiveOutput,
     build_false_negative_mask,
@@ -41,12 +43,15 @@ __all__ = [
     "ItemTower",
     "ModalityEncoder",
     "MultimodalTwoTower",
+    "RetrievalCatalogue",
     "TrainingHistory",
     "TwoTowerBatch",
     "TwoTowerConfig",
+    "TwoTowerRetriever",
     "TwoTowerTrainer",
     "TwoTowerTrainingDataset",
     "UserTower",
+    "build_catalogue",
     "build_false_negative_mask",
     "build_metadata",
     "in_batch_contrastive_loss",
