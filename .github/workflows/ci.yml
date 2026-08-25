@@ -167,6 +167,15 @@ jobs:
       - name: Rolling temporal validation tests
         run: pytest tests/unit/data/test_rolling.py -q
 
+      # The generated model configs are derived from selection records that live
+      # under the gitignored `reports/metrics/`. The tracked provenance files are
+      # the only copy CI can see, so this is what makes the drift gate real
+      # rather than a claim in a docstring.
+      - name: Selection provenance is tracked and well-formed
+        run: |
+          python scripts/record_selection_provenance.py --phase 3 --check
+          python scripts/record_selection_provenance.py --phase 4 --check
+
       # Small, deterministic, CPU-only fixture training through the full
       # retrieval path. No PixelRec download, no GPU, no full-dataset training.
       - name: Fixture retrieval integration test

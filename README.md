@@ -116,7 +116,8 @@ Detailed diagrams: [`docs/architecture/system_architecture.md`](docs/architectur
 | **Candidate aggregation (3 strategies)** | ✅ Implemented | `src/omnirank/retrieval/aggregation.py` |
 | **Vector index (FAISS)** | ✅ Implemented | `src/omnirank/retrieval/faiss_index.py` |
 | **Rolling temporal validation** | ✅ Implemented | `src/omnirank/data/rolling.py` |
-| Two-tower, ranker, reranker | 📋 Interface only | `src/omnirank/models/base.py` |
+| Multimodal two-tower retrieval | 📋 Interface only | `src/omnirank/models/two_tower/` |
+| Ranker and reranker | 📋 Interface only | `src/omnirank/models/base.py` |
 | Database and cache clients | 📋 Protocol only | `src/omnirank/{database,cache}/` |
 | Prometheus / Grafana, Kubernetes, streaming | ❌ Deferred | — |
 
@@ -382,8 +383,8 @@ Tests require no GPU, no network, no database, and no downloaded model weights.
 | **1** | Architecture and foundation: structure, config, contracts, artifact registry, API skeleton, docs, tests | ✅ **Complete** |
 | **2** | PixelRec50K data engineering: loaders, cleaning, filtering, ordered splitting, leakage validation, collaborative/graph/sequential datasets, feature alignment, slices, manifest | ✅ **Complete** |
 | **3** | Offline evaluation, popularity and matrix-factorization baselines | ✅ **Complete** |
-| **4** | LightGCN, SASRec, candidate aggregation, FAISS index | Complete |
-| **5** | Multimodal two-tower retrieval | Planned |
+| **4** | LightGCN, SASRec, candidate aggregation, FAISS index | ✅ **Core complete**, with [documented limitations](docs/phase_reports/phase_04_report.md#limitations) |
+| **5** | Multimodal two-tower retrieval and new-item cold start | 🔨 **Current** |
 | **6** | Learning-to-rank, MMR and online serving | Planned |
 | **7** | Monitoring and online experimentation | Planned |
 

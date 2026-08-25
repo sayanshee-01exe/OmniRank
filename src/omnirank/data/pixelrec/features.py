@@ -312,6 +312,12 @@ def align_features(
     mismatches = 0
     seen: set[str] = set()
     matrix: np.ndarray | None = None
+    # Accumulated in arrays indexed by internal id, then written to the frame
+    # once. The obvious `index.loc[index[...] == internal] = True` inside the
+    # loop is a full frame scan per matched item -- O(n^2), about 4.8 billion
+    # comparisons at this catalogue size. It is not slow, it does not finish.
+    has_feature = np.zeros(expected_items, dtype=bool)
+    feature_rows = np.full(expected_items, -1, dtype="int64")
 
     for item_id, vector in stream_feature_vectors(source, wanted_ids=wanted):
         rows_in_source += 1
@@ -339,8 +345,14 @@ def align_features(
 
         internal = external_to_internal[item_id]
         matrix[internal] = array
-        index.loc[index["internal_item_id"] == internal, has_flag] = True
-        index.loc[index["internal_item_id"] == internal, row_column] = internal
+        has_feature[internal] = True
+        feature_rows[internal] = internal
+
+    # Mapped through the frame's own internal ids rather than assuming row order
+    # equals internal id, which happens to be true here and need not stay true.
+    internal_ids = index["internal_item_id"].to_numpy(dtype="int64")
+    index[has_flag] = has_feature[internal_ids]
+    index[row_column] = feature_rows[internal_ids]
 
     matched = int(index[has_flag].sum())
     validation = FeatureValidation(

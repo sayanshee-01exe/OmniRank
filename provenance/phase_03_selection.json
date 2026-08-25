@@ -1,0 +1,74 @@
+{
+  "contains": "Hyperparameters, aggregate validation metrics and identity hashes only. No per-user or per-item PixelRec-derived rows.",
+  "dataset_identity": {
+    "data_git_commit": "0192d4905ff439fac4ebf6daecfd3285bc5aee34",
+    "dataset_configuration_hash": "0c601865de162e1f31ff95ec5bed5d1bf24b97d8b1a1cc178ead254e761c56e4",
+    "dataset_manifest_sha256": "9d1eabb7977d24acacf8f4f3e92e9abe28ab183e134c037ba1fecc599e424c31",
+    "dataset_name": "pixelrec50k",
+    "dataset_version": "v1",
+    "mapping_version": "1",
+    "ordering_field": "timestamp",
+    "pipeline_version": "2.0.0",
+    "schema_version": "2",
+    "split_strategy": "per_user_leave_last_n",
+    "split_version": "1"
+  },
+  "fit_splits": [
+    "train"
+  ],
+  "git_commit": "3cbd2b188c6166a84111104eea931f621ee7df40",
+  "models": {
+    "dataset_identity": {
+      "hyperparameters": {
+        "data_git_commit": "0192d4905ff439fac4ebf6daecfd3285bc5aee34",
+        "dataset_configuration_hash": "0c601865de162e1f31ff95ec5bed5d1bf24b97d8b1a1cc178ead254e761c56e4",
+        "dataset_manifest_sha256": "9d1eabb7977d24acacf8f4f3e92e9abe28ab183e134c037ba1fecc599e424c31",
+        "dataset_name": "pixelrec50k",
+        "dataset_version": "v1",
+        "mapping_version": "1",
+        "ordering_field": "timestamp",
+        "pipeline_version": "2.0.0",
+        "schema_version": "2",
+        "split_strategy": "per_user_leave_last_n",
+        "split_version": "1",
+        "subset_users": null
+      },
+      "validation_metrics": {}
+    },
+    "matrix_factorization": {
+      "hyperparameters": {
+        "batch_size": 8192,
+        "embedding_dim": 256,
+        "epochs": 80,
+        "evaluation_user_batch_size": 1024,
+        "learning_rate": 0.005,
+        "negatives_per_positive": 3,
+        "regularization": 0.0001,
+        "seed": 42
+      },
+      "validation_metrics": {
+        "validation_ndcg@20": 0.00339,
+        "validation_recall@20": 0.00848
+      }
+    },
+    "popularity": {
+      "hyperparameters": {
+        "half_life_days": 45.0,
+        "variant": "time_decay"
+      },
+      "validation_metrics": {
+        "validation_ndcg@20": 0.0021494,
+        "validation_recall@20": 0.00558
+      }
+    }
+  },
+  "phase": 3,
+  "search_notes": [
+    "The initial 30-epoch grid ranked BPR below popularity (0.00180 vs 0.00215). The grid showed embedding_dim, negatives_per_positive and epochs all still improving, i.e. the model was under-trained rather than beaten, so the search was extended on validation before drawing any conclusion.",
+    "Extended runs (80 epochs): d128/neg1 0.00197, d128/neg3 0.00227, d256/neg3 0.00339. BPR overtakes popularity from d128/neg3 onward.",
+    "NDCG@20 was still rising with embedding_dim at the stopping point. d256 is the best configuration searched, not a demonstrated optimum; a wider sweep is a Phase 4 lead and is recorded as a known limitation."
+  ],
+  "selected_by": "validation ndcg@20, tie-broken by recall@20 then runtime",
+  "selection_timestamp": "2026-08-25T06:15:53.434238+00:00",
+  "target_split": "validation"
+}

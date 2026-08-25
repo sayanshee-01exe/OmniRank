@@ -286,8 +286,14 @@ def _run_selection(
     return True
 
 
-def _run_lock(logger: Any, run_id: str) -> bool:
-    """Freeze the selected configurations before any test data is touched."""
+def _run_lock(dataset: Any, logger: Any, run_id: str) -> bool:
+    """Freeze the selected configurations before any test data is touched.
+
+    Records the dataset identity alongside the hyperparameters. A locked
+    configuration that does not say which data it was selected on is not a
+    reproducible commitment -- the same numbers could have come from a different
+    split or mapping, and nothing in the file would say so.
+    """
     partial = PHASE_ROOT / "selection_candidates.json"
     if not partial.is_file():
         logger.error(
@@ -306,8 +312,17 @@ def _run_lock(logger: Any, run_id: str) -> bool:
         for name in (POPULARITY, MATRIX_FACTORIZATION):
             if name in phase_3:
                 selection[name] = {**phase_3[name], "inherited_from": "phase_03"}
+    selection["dataset_identity"] = dataset.identity.to_dict()
+    selection["selected_by"] = "rolling/validation strict ndcg@20"
+    selection["fit_splits"] = ["train"]
+    selection["target_split"] = "validation"
     write_json(selection, SELECTION_FILE)
-    logger.info("compare_retrievers.locked", run_id=run_id, models=sorted(selection))
+    logger.info(
+        "compare_retrievers.locked",
+        run_id=run_id,
+        models=sorted(key for key, value in selection.items() if isinstance(value, dict)),
+        dataset=dataset.identity.label,
+    )
     return True
 
 
@@ -524,7 +539,7 @@ def main(argv: list[str] | None = None) -> int:
         ):
             return RUN_ERROR_EXIT
 
-        if args.stage in ("all", "lock") and not _run_lock(logger, run_id):
+        if args.stage in ("all", "lock") and not _run_lock(dataset, logger, run_id):
             return RUN_ERROR_EXIT
 
         if args.stage in ("all", "final") and not _run_final(dataset, config, args, logger, run_id):

@@ -1,0 +1,110 @@
+{
+  "contains": "Hyperparameters, aggregate validation metrics and identity hashes only. No per-user or per-item PixelRec-derived rows.",
+  "dataset_identity": {
+    "data_git_commit": "0192d4905ff439fac4ebf6daecfd3285bc5aee34",
+    "dataset_configuration_hash": "0c601865de162e1f31ff95ec5bed5d1bf24b97d8b1a1cc178ead254e761c56e4",
+    "dataset_manifest_sha256": "9d1eabb7977d24acacf8f4f3e92e9abe28ab183e134c037ba1fecc599e424c31",
+    "dataset_name": "pixelrec50k",
+    "dataset_version": "v1",
+    "mapping_version": "1",
+    "ordering_field": "timestamp",
+    "pipeline_version": "2.0.0",
+    "schema_version": "2",
+    "split_strategy": "per_user_leave_last_n",
+    "split_version": "1"
+  },
+  "fit_splits": [
+    "train"
+  ],
+  "git_commit": "3cbd2b188c6166a84111104eea931f621ee7df40",
+  "models": {
+    "dataset_identity": {
+      "hyperparameters": {
+        "data_git_commit": "0192d4905ff439fac4ebf6daecfd3285bc5aee34",
+        "dataset_configuration_hash": "0c601865de162e1f31ff95ec5bed5d1bf24b97d8b1a1cc178ead254e761c56e4",
+        "dataset_manifest_sha256": "9d1eabb7977d24acacf8f4f3e92e9abe28ab183e134c037ba1fecc599e424c31",
+        "dataset_name": "pixelrec50k",
+        "dataset_version": "v1",
+        "mapping_version": "1",
+        "ordering_field": "timestamp",
+        "pipeline_version": "2.0.0",
+        "schema_version": "2",
+        "split_strategy": "per_user_leave_last_n",
+        "split_version": "1",
+        "subset_users": null
+      },
+      "validation_metrics": {}
+    },
+    "lightgcn": {
+      "hyperparameters": {
+        "batch_size": 8192,
+        "early_stopping_patience": 10,
+        "embedding_dim": 128,
+        "evaluation_user_batch_size": 256,
+        "learning_rate": 0.005,
+        "max_epochs": 30,
+        "negatives_per_positive": 3,
+        "num_layers": 3,
+        "regularization": 0.0001,
+        "seed": 42
+      },
+      "validation_metrics": {
+        "validation_ndcg@20": 0.00612171,
+        "validation_recall@20": 0.0158
+      }
+    },
+    "matrix_factorization": {
+      "hyperparameters": {
+        "batch_size": 8192,
+        "embedding_dim": 256,
+        "epochs": 80,
+        "evaluation_user_batch_size": 1024,
+        "learning_rate": 0.005,
+        "negatives_per_positive": 3,
+        "regularization": 0.0001,
+        "seed": 42
+      },
+      "inherited_from": "phase_03",
+      "validation_metrics": {
+        "validation_ndcg@20": 0.00339,
+        "validation_recall@20": 0.00848
+      }
+    },
+    "popularity": {
+      "hyperparameters": {
+        "half_life_days": 45.0,
+        "variant": "time_decay"
+      },
+      "inherited_from": "phase_03",
+      "validation_metrics": {
+        "validation_ndcg@20": 0.0021494,
+        "validation_recall@20": 0.00558
+      }
+    },
+    "sasrec": {
+      "hyperparameters": {
+        "batch_size": 512,
+        "dropout": 0.2,
+        "early_stopping_patience": 10,
+        "embedding_dim": 64,
+        "evaluation_user_batch_size": 256,
+        "learning_rate": 0.001,
+        "max_epochs": 45,
+        "maximum_sequence_length": 50,
+        "negatives_per_positive": 1,
+        "num_blocks": 2,
+        "num_heads": 2,
+        "seed": 42
+      },
+      "validation_metrics": {
+        "validation_ndcg@20": 0.004335,
+        "validation_recall@20": 0.0113
+      }
+    }
+  },
+  "phase": 4,
+  "search_notes": null,
+  "selected_by": "rolling/validation strict ndcg@20",
+  "selection_timestamp": "2026-08-25T06:25:28.253125+00:00",
+  "target_split": "validation"
+}
