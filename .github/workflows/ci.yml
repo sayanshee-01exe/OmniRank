@@ -229,6 +229,19 @@ jobs:
       - name: Two-tower FAISS exactness tests
         run: pytest tests/unit/retrieval/test_two_tower_index.py -q
 
+      # Rolling folds must build their histories from their own pre-origin
+      # interactions. A fold that quietly reused the training split would make
+      # "rolling validation" a label rather than a measurement.
+      - name: Fold construction and scoring tests
+        run: pytest tests/unit/retrieval/test_fold_sequences.py \
+                    tests/unit/retrieval/test_fold_evaluation.py -q
+
+      # Seeding must precede model construction. The wrong order still produces
+      # a valid model -- one whose weights depend on how many models were fitted
+      # before it in the same process -- so this asserts call order, not output.
+      - name: Fit determinism tests
+        run: pytest tests/unit/retrieval/test_fit_determinism.py -q
+
       # The mandatory cold-item workflow: a target no collaborative model can
       # reach, retrieved from content through a real index.
       - name: Cold-item and five-source fusion integration

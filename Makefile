@@ -136,6 +136,43 @@ benchmark-index:  ## Measure every FAISS index type against exact search
 	$(PYTHON) scripts/benchmark_index.py \
 	    --model lightgcn --version phase4-lightgcn-final
 
+# --- Phase 5: multimodal two-tower retrieval ---------------------------------
+
+prepare-features:  ## Align PixelRec's published text/image vectors to the catalogue
+	$(PYTHON) scripts/prepare_multimodal_features.py \
+	    --config-dir configs --data-config configs/data/pixelrec50k.yaml
+
+compare-multimodal:  ## Phase 5 ablation screen on the train->validation boundary
+	$(PYTHON) scripts/compare_multimodal_retrievers.py \
+	    --config-dir configs --data-config configs/data/pixelrec50k.yaml \
+	    --stage rolling-selection
+
+rolling-folds:  ## Confirm the finalists across genuine pre-test rolling folds
+	$(PYTHON) scripts/run_rolling_folds.py --stage folds
+
+multi-seed:  ## Re-run the selected configuration at seeds 42, 43 and 44
+	$(PYTHON) scripts/run_rolling_folds.py --stage multi-seed --seeds 42,43,44
+
+two-tower-final:  ## Refit on train+validation, score test once, register the artifact
+	$(PYTHON) scripts/compare_multimodal_retrievers.py \
+	    --config-dir configs --data-config configs/data/pixelrec50k.yaml \
+	    --stage final --overwrite
+
+compare-fusion:  ## Four-source against five-source RRF, from registered artifacts
+	$(PYTHON) scripts/compare_five_source_fusion.py
+
+phase5-configs:  ## Regenerate the derived Phase 5 configuration files
+	$(PYTHON) scripts/generate_phase5_configs.py
+
+phase5-artifacts:  ## Missing-modality, index benchmark, runtime and example evidence
+	$(PYTHON) scripts/generate_phase5_artifacts.py
+
+phase5-report:  ## Assemble the Phase 5 report from the metric files
+	$(PYTHON) scripts/generate_phase5_report.py
+
+validate-phase5:  ## The Phase 5 completion gate (exit 0 means Phase 6 may begin)
+	$(PYTHON) scripts/validate_phase5.py
+
 serve:  ## Run the API locally
 	$(PYTHON) scripts/serve.py
 

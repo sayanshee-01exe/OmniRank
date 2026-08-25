@@ -155,6 +155,41 @@ def load_item_tags(processed_root: Path | str, num_items: int) -> tuple[np.ndarr
     return tags, num_tags
 
 
+def sequences_from_fold(fold: Any, *, maximum_history_length: int = 50) -> pd.DataFrame:
+    """Build two-tower training examples from one rolling fold.
+
+    Each user's fold history becomes the input and their fold target becomes the
+    label. Only rows the fold marked ``history`` are used, so nothing at or
+    after the fold origin can reach the model -- which is the property that
+    makes a fold a fold rather than a relabelled copy of the training split.
+    """
+    history = fold.history.sort_values(["internal_user_id", "interaction_order"])
+    targets = fold.targets.set_index("internal_user_id")["internal_item_id"]
+
+    grouped = history.groupby("internal_user_id")["internal_item_id"].apply(list)
+    rows: list[tuple[int, list[int], int]] = []
+    for user, items in grouped.items():
+        target = targets.get(user)
+        if target is None or not items:
+            continue
+        recent = items[-maximum_history_length:]
+        # Phase 2 deduplicates repeat events, so a target never reappears in its
+        # own history. Asserted rather than assumed, because a fold builder
+        # change could silently reintroduce it.
+        if int(target) in recent:
+            continue
+        rows.append((int(user), recent, int(target)))
+
+    frame = pd.DataFrame(rows, columns=["internal_user_id", "item_sequence", "target_item"])
+    logger.info(
+        "two_tower.fold_sequences_built",
+        fold=fold.name,
+        examples=len(frame),
+        history_rows=len(history),
+    )
+    return frame
+
+
 def fit_two_tower(
     dataset: ProcessedDataset,
     fit_splits: tuple[str, ...],
@@ -165,6 +200,7 @@ def fit_two_tower(
     subset_users: int | None = None,
     max_batches_per_epoch: int | None = None,
     validation_splits: tuple[str, ...] = (),
+    sequences: pd.DataFrame | None = None,
 ) -> tuple[Any, Any]:
     """Fit the multimodal two-tower model on the Phase 2 sequential examples.
 
@@ -187,7 +223,11 @@ def fit_two_tower(
     )
 
     tags, num_tags = load_item_tags(root, dataset.num_items)
-    sequences = load_sequences(root, fit_splits)
+    # A rolling fold supplies its own sequences, built from that fold's history
+    # only. Falling back to the split files would train every fold on the same
+    # data and make "rolling validation" a label rather than a measurement.
+    if sequences is None:
+        sequences = load_sequences(root, fit_splits)
     if subset_users is not None:
         sequences = sequences[sequences["internal_user_id"] < subset_users]
         if sequences.empty:
@@ -224,6 +264,12 @@ def fit_two_tower(
                 num_tags=num_tags,
             )
 
+    # Seeded *before* construction, not by the trainer afterwards. Parameter
+    # initialisation draws from the global torch RNG, so a model built before
+    # the seed was set inherits whatever state the process happened to be in --
+    # which makes a result depend on how many models ran before it. That
+    # silently breaks the one thing multi-seed verification is for.
+    TwoTowerTrainer.set_seeds(config.seed)
     model = MultimodalTwoTower(
         config,
         text_dim=store.dimension("text"),
@@ -249,4 +295,5 @@ __all__ = [
     "fit_two_tower",
     "load_item_tags",
     "load_sequences",
+    "sequences_from_fold",
 ]

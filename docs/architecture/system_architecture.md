@@ -86,13 +86,13 @@ Candidate generation  ── each implements CandidateGenerator
 Candidate aggregation and deduplication    Phase 4 — CandidateAggregator
         │
         ▼
-Ranking-feature generation                 Phase 5 — FeatureBuilder
+Ranking-feature generation                 Phase 6 — FeatureBuilder
         │
         ▼
-LightGBM ranker                            Phase 5 — Ranker
+LightGBM ranker                            Phase 6 — Ranker
         │
         ▼
-MMR diversity-aware reranking              Phase 5 — Reranker
+MMR diversity-aware reranking              Phase 6 — Reranker
         │
         ▼
 Final Top-K recommendations

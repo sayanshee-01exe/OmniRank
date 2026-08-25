@@ -28,7 +28,10 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import csv
+import dataclasses
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -45,11 +48,21 @@ from omnirank.data.processed import load_processed_dataset
 from omnirank.evaluation.evaluator import PRIMARY_METRICS
 from omnirank.evaluation.reporting import REPORT_ROOT, append_jsonl, write_csv, write_json
 from omnirank.models.baselines.runner import boundary_for_stage, run_experiment
+from omnirank.retrieval.fold_evaluation import ABLATION_OVERRIDES, summarise_folds
 
 CONFIG_ERROR_EXIT = 2
 RUN_ERROR_EXIT = 3
 
 PHASE_ROOT = REPORT_ROOT.parent / "phase_05"
+
+#: Screened variants carried into the fold confirmation.
+#:
+#: Four, not two. Two independent runs of the same nine-variant screen produced
+#: *disjoint* top-two sets, which says the screen's ordering is noise-dominated
+#: at this subset size. A shortlist of two would therefore be a coin flip
+#: dressed as a ranking. Four is what the fold budget affords while making it
+#: unlikely that the fold-best variant was screened out.
+FINALIST_COUNT = 4
 RUNS_FILE = PHASE_ROOT / "rolling_validation_runs.jsonl"
 SELECTION_FILE = PHASE_ROOT / "selected_configuration.json"
 CANDIDATES_FILE = PHASE_ROOT / "selection_candidates.json"
@@ -59,65 +72,15 @@ TRIAL_METRICS = ("recall@20", "ndcg@20", "coverage@20")
 
 
 def ablation_grid() -> list[dict[str, Any]]:
-    """The modality ablations §11 requires.
+    """The modality ablations, from the single definition both drivers share.
 
-    Each is a configuration override, not a separate model class, so every
+    Each is a configuration *override*, not a separate model class, so every
     variant goes through identical code and a difference between them is
-    attributable to the modality rather than to the implementation.
+    attributable to the input rather than to the implementation. Sourced from
+    :data:`ABLATION_OVERRIDES` so the screen and the fold confirmation cannot
+    end up running different grids under the same labels.
     """
-    return [
-        {
-            "label": "text_only",
-            "use_text": True,
-            "use_image": False,
-            "use_tag": False,
-            "use_item_id_residual": False,
-        },
-        {
-            "label": "image_only",
-            "use_text": False,
-            "use_image": True,
-            "use_tag": False,
-            "use_item_id_residual": False,
-        },
-        {
-            "label": "text_image",
-            "use_text": True,
-            "use_image": True,
-            "use_tag": False,
-            "use_item_id_residual": False,
-        },
-        {
-            "label": "text_image_tag",
-            "use_text": True,
-            "use_image": True,
-            "use_tag": True,
-            "use_item_id_residual": False,
-        },
-        {
-            "label": "full_with_id_residual",
-            "use_text": True,
-            "use_image": True,
-            "use_tag": True,
-            "use_item_id_residual": True,
-        },
-        {
-            "label": "full_no_user_id",
-            "use_text": True,
-            "use_image": True,
-            "use_tag": True,
-            "use_item_id_residual": False,
-            "use_user_id_embedding": False,
-        },
-        {
-            "label": "mean_pooling",
-            "use_text": True,
-            "use_image": True,
-            "use_tag": True,
-            "use_item_id_residual": False,
-            "history_pooling": "mean",
-        },
-    ]
+    return [{"label": label, **overrides} for label, overrides in ABLATION_OVERRIDES.items()]
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -135,9 +98,37 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", default="auto", choices=("auto", "cpu", "mps"))
     parser.add_argument("--subset-users", type=int, default=5000)
     parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--seeds", type=int, default=1)
+    parser.add_argument(
+        "--seeds",
+        default="42",
+        help="Comma-separated seeds for multi-seed verification of the selection.",
+    )
+    parser.add_argument(
+        "--fold-offsets",
+        default="3,2",
+        type=lambda value: [int(part) for part in value.split(",")],
+        help="Rolling-fold target offsets. Offset 1 is the reserved test target.",
+    )
     parser.add_argument("--skip-checksums", action="store_true")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace an already-registered artifact version of the same name.",
+    )
     parser.add_argument("--only", default=None, help="Comma-separated ablation labels to run.")
+    parser.add_argument(
+        "--reuse-screen",
+        action="store_true",
+        help=(
+            "Load ablation_results.csv instead of re-running the screen. Only "
+            "valid when that file was produced by this code at this commit."
+        ),
+    )
+    parser.add_argument(
+        "--reuse-folds",
+        action="store_true",
+        help="Load rolling_fold_results.csv instead of re-running the folds.",
+    )
     return parser.parse_args(argv)
 
 
@@ -234,8 +225,16 @@ def _run_variant(
         for slice_result in result.slices
     }
     record = {
+        # Identity first, so a row in the CSV can be traced back to the run
+        # that produced it without joining against the JSONL log.
+        "experiment_id": f"{label}@{target}@seed{seed}",
         "label": label,
+        # The screen has no fold: it is a single train-to-validation boundary,
+        # and recording it as one would make the column a lie the moment
+        # somebody concatenated these rows with the fold results.
+        "fold": f"boundary:{'+'.join(fit_splits)}->{target}",
         "seed": seed,
+        "configuration_hash": model_config.label,
         **{key: round(flat[key], 8) for key in TRIAL_METRICS if key in flat},
         "cold_ndcg@20": cold.get("items_cold_start"),
         "catalogue_items": len(retriever.catalogue),
@@ -286,16 +285,79 @@ def _run_preflight(dataset: Any, logger: Any, run_id: str) -> bool:
     return True
 
 
+def _build_folds(dataset: Any, args: argparse.Namespace, logger: Any, run_id: str) -> Any:
+    """Construct the genuine pre-test rolling folds.
+
+    A single train-to-validation boundary is not rolling selection: it measures
+    one week and cannot distinguish "this configuration is better" from "this
+    configuration suits this particular boundary". Phase 3 ended with exactly
+    that ambiguity, and Phase 4 built the fold machinery to resolve it.
+
+    Offset 1 is the official test target and is refused by ``build_fold``
+    itself, so a selection run cannot reach it even by mistake.
+    """
+    from omnirank.data.rolling import (
+        build_rolling_validation,
+        check_fold_integrity,
+        check_no_reserved_offset_used,
+    )
+
+    interactions = dataset.fit_interactions(("train", "validation"))
+    validation = build_rolling_validation(
+        interactions,
+        target_offsets=tuple(args.fold_offsets),
+        dataset_identity=dataset.identity.to_dict(),
+    )
+    # Both assertions are cheap and both failures are invisible at runtime: a
+    # fold that leaked future events trains a better-looking model, and a fold
+    # that reached offset 1 reports a test number as a validation one.
+    for fold in validation.folds:
+        check_fold_integrity(fold)
+    check_no_reserved_offset_used(validation)
+
+    write_json(validation.manifest(), PHASE_ROOT / "rolling_fold_manifest.json")
+    for fold in validation.folds:
+        logger.info("phase5.fold_built", run_id=run_id, **fold.describe())
+    return validation
+
+
 def _run_selection(
     dataset: Any, config: Any, args: argparse.Namespace, logger: Any, run_id: str
 ) -> bool:
-    """Run the modality ablations on validation, never on test."""
+    """Screen the ablation grid, then confirm the finalists across folds.
+
+    Never touches test. The screen uses the train-to-validation boundary
+    because nine configurations at two origins each is compute nobody needs to
+    spend to rank a grid; the finalists then pay for the folds.
+    """
     fit_splits, target = boundary_for_stage("selection")
     PHASE_ROOT.mkdir(parents=True, exist_ok=True)
     wanted = {name.strip() for name in args.only.split(",")} if args.only else None
 
     rows: list[dict[str, Any]] = []
-    for variant in ablation_grid():
+    if wanted and not args.reuse_screen:
+        # A partial re-run extends the screen rather than replacing it.
+        # Writing only the requested variants would silently drop every other
+        # row from ablation_results.csv, and the file would still look valid.
+        rows = [
+            row
+            for row in _load_rows(PHASE_ROOT / "ablation_results.csv", TRIAL_METRICS)
+            if row.get("label") not in wanted
+        ]
+        logger.info("phase5.screen_extended", run_id=run_id, existing=len(rows), adding=len(wanted))
+
+    if args.reuse_screen:
+        rows = _load_rows(PHASE_ROOT / "ablation_results.csv", ("ndcg@20", "recall@20"))
+        if not rows:
+            logger.error(
+                "phase5.no_screen_to_reuse",
+                run_id=run_id,
+                expected=str(PHASE_ROOT / "ablation_results.csv"),
+            )
+            return False
+        logger.info("phase5.screen_reused", run_id=run_id, variants=len(rows))
+
+    for variant in [] if args.reuse_screen else ablation_grid():
         if wanted and variant["label"] not in wanted:
             continue
         try:
@@ -318,7 +380,7 @@ def _run_selection(
             )
             return False
         record["run_id"] = run_id
-        record["stage"] = "rolling-selection"
+        record["stage"] = "ablation-screen"
         record["subset_users"] = args.subset_users
         append_jsonl(record, RUNS_FILE)
         rows.append(record)
@@ -335,10 +397,214 @@ def _run_selection(
         logger.error("phase5.no_variants_ran", run_id=run_id)
         return False
 
-    best = max(rows, key=lambda row: row.get("ndcg@20") or 0.0)
+    # Phase one screened every variant at one origin. That ranks the grid
+    # cheaply; it does not establish that the ranking holds. The finalists are
+    # re-fitted on each pre-test fold's own history before anything is locked,
+    # so the selected configuration is one that won more than one week.
+    finalists = [
+        row["label"]
+        for row in sorted(rows, key=lambda row: row.get("ndcg@20") or 0.0, reverse=True)
+    ][:FINALIST_COUNT]
+    if args.reuse_folds:
+        fold_rows = _load_rows(
+            PHASE_ROOT / "rolling_fold_results.csv",
+            (
+                "strict_ndcg@20",
+                "strict_recall@20",
+                "cold_recall@20",
+                "candidate_recall@200",
+                "train_seconds",
+                "peak_memory_mb",
+            ),
+        )
+        # Reuse is only meaningful if the finalists are actually in the file.
+        # Silently summarising somebody else's runs would be worse than paying
+        # to re-run these ones.
+        measured = {row["label"] for row in fold_rows}
+        if not fold_rows or not set(finalists) <= measured:
+            logger.error(
+                "phase5.no_folds_to_reuse",
+                run_id=run_id,
+                finalists=finalists,
+                measured=sorted(measured),
+            )
+            return False
+        fold_rows = [row for row in fold_rows if row["label"] in set(finalists)]
+        logger.info("phase5.folds_reused", run_id=run_id, runs=len(fold_rows))
+    else:
+        fold_rows = _confirm_across_folds(finalists, dataset, config, args, logger, run_id)
+    if fold_rows is None:
+        return False
+
+    summary = {entry["label"]: entry for entry in summarise_folds(fold_rows)}
+    write_csv(list(summary.values()), PHASE_ROOT / "rolling_validation_summary.csv")
+
+    chosen = _choose(list(summary.values()), logger, run_id)
+    best = next(row for row in rows if row["label"] == chosen["label"])
+    # Record the *resolved* configuration, not just the overrides. A lock that
+    # stores "use_tag: true" and nothing else leaves every other hyperparameter
+    # to whatever configs/models/two_tower.yaml happens to say when the final
+    # refit runs -- which is a different model under the same name.
+    best = {
+        **best,
+        **_resolve_configuration(str(chosen["label"]), args),
+        "rolling_validation": chosen,
+    }
     write_json({"two_tower": best}, CANDIDATES_FILE)
-    logger.info("phase5.selected", run_id=run_id, label=best["label"], ndcg=best.get("ndcg@20"))
+    logger.info(
+        "phase5.selected",
+        run_id=run_id,
+        label=best["label"],
+        screen_ndcg=best.get("ndcg@20"),
+        mean_fold_ndcg=chosen["mean_strict_ndcg@20"],
+        worst_fold_ndcg=chosen["worst_fold_strict_ndcg@20"],
+        folds=chosen["folds"],
+    )
     return True
+
+
+def _choose(summary: list[dict[str, Any]], logger: Any, run_id: str) -> dict[str, Any]:
+    """Pick a configuration from the fold summary, noise-aware.
+
+    Ranking purely on the mean picks a winner even when the gap between the top
+    two is smaller than their own run-to-run spread -- which is choosing on
+    noise while producing a number that looks like a decision. Measured spreads
+    here are frequently larger than the gaps.
+
+    So: take the highest mean only when it leads the runner-up by more than the
+    larger of the two standard deviations. Otherwise the two are not
+    distinguishable on this evidence, and the tie-break is the **worst single
+    run**, which prefers the configuration that fails less badly rather than the
+    one that happened to spike.
+    """
+    ranked = sorted(summary, key=lambda entry: entry["mean_strict_ndcg@20"], reverse=True)
+    best = ranked[0]
+    if len(ranked) < 2:
+        return best
+
+    runner_up = ranked[1]
+    gap = best["mean_strict_ndcg@20"] - runner_up["mean_strict_ndcg@20"]
+    noise = max(best["stdev_strict_ndcg@20"], runner_up["stdev_strict_ndcg@20"])
+    if gap > noise:
+        logger.info(
+            "phase5.selection_decisive",
+            run_id=run_id,
+            winner=best["label"],
+            gap=round(gap, 8),
+            noise=round(noise, 8),
+        )
+        return best
+
+    contenders = [
+        entry
+        for entry in ranked
+        if best["mean_strict_ndcg@20"] - entry["mean_strict_ndcg@20"] <= noise
+    ]
+    tie_broken = max(contenders, key=lambda entry: entry["worst_fold_mean_strict_ndcg@20"])
+    counts = {entry["label"]: entry["runs"] for entry in contenders}
+    logger.info(
+        "phase5.selection_within_noise",
+        run_id=run_id,
+        winner=tie_broken["label"],
+        highest_mean=best["label"],
+        gap=round(gap, 8),
+        noise=round(noise, 8),
+        contenders=[entry["label"] for entry in contenders],
+        runs_per_contender=counts,
+        # Surfaced rather than silently tolerated: a tie-break across unequal
+        # footing is weaker evidence, and a reader should be able to see it.
+        equal_footing=len(set(counts.values())) == 1,
+        rule="means within one stdev; broken on worst fold mean",
+    )
+    return tie_broken
+
+
+def _resolve_configuration(label: str, args: argparse.Namespace) -> dict[str, Any]:
+    """The full hyperparameter set a label expands to, as the trainer sees it."""
+    import yaml
+
+    from omnirank.models.two_tower import TwoTowerConfig
+    from omnirank.retrieval.fold_evaluation import overrides_for
+
+    raw = yaml.safe_load(Path("configs/models/two_tower.yaml").read_text())["two_tower"]
+    raw.update(overrides_for(label))
+    raw.update({"max_epochs": args.epochs, "device": args.device})
+    return TwoTowerConfig(**raw).to_dict()
+
+
+def _confirm_across_folds(
+    labels: list[str],
+    dataset: Any,
+    config: Any,
+    args: argparse.Namespace,
+    logger: Any,
+    run_id: str,
+) -> list[dict[str, Any]] | None:
+    """Re-fit the finalists on each rolling fold. ``None`` on failure."""
+    import yaml
+
+    from omnirank.retrieval.fold_evaluation import evaluate_on_fold
+
+    try:
+        validation = _build_folds(dataset, args, logger, run_id)
+    except OmniRankError as exc:
+        logger.error("phase5.folds_failed", run_id=run_id, reason=str(exc))
+        return None
+
+    base_config = yaml.safe_load(Path("configs/models/two_tower.yaml").read_text())["two_tower"]
+    seeds = [int(value) for value in str(args.seeds).split(",")]
+    rows: list[dict[str, Any]] = []
+    for label in labels:
+        for fold in validation.folds:
+            for seed in seeds:
+                try:
+                    record = evaluate_on_fold(
+                        label,
+                        fold,
+                        seed,
+                        dataset=dataset,
+                        processed_root=Path(config.data.dataset.processed_dir),
+                        base_config=base_config,
+                        epochs=args.epochs,
+                        device=args.device,
+                        subset_users=args.subset_users,
+                    )
+                except OmniRankError as exc:
+                    logger.error(
+                        "phase5.fold_run_failed",
+                        run_id=run_id,
+                        label=label,
+                        fold=fold.name,
+                        seed=seed,
+                        reason=str(exc),
+                    )
+                    return None
+                record |= {"run_id": run_id, "stage": "rolling-fold"}
+                append_jsonl(record, PHASE_ROOT / "rolling_validation_runs.jsonl")
+                rows.append(record)
+                write_csv(rows, PHASE_ROOT / "rolling_fold_results.csv")
+    return rows
+
+
+def _load_rows(path: Path, numeric: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Read a metric CSV back, restoring the numeric columns.
+
+    ``csv.DictReader`` returns strings, and a summariser comparing "0.01" with
+    "0.009" as strings would rank them wrongly and never say so.
+    """
+    if not path.is_file() or not path.read_text().strip():
+        return []
+    with path.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    for row in rows:
+        for column in numeric:
+            value = row.get(column)
+            if value in (None, "", "None"):
+                row[column] = None
+                continue
+            with contextlib.suppress(ValueError):
+                row[column] = float(value)
+    return rows
 
 
 def _run_lock(dataset: Any, logger: Any, run_id: str) -> bool:
@@ -353,7 +619,11 @@ def _run_lock(dataset: Any, logger: Any, run_id: str) -> bool:
         return False
     selection = json.loads(CANDIDATES_FILE.read_text())
     selection["dataset_identity"] = dataset.identity.to_dict()
-    selection["selected_by"] = "validation strict ndcg@20, cold recall as tie-breaker"
+    selection["selected_by"] = (
+        "two stage: ablation screen on the train->validation boundary, then "
+        "confirmation across rolling folds; chosen on mean fold strict ndcg@20 "
+        "with the worst fold as tie-breaker"
+    )
     selection["fit_splits"] = ["train"]
     selection["target_split"] = "validation"
     write_json(selection, SELECTION_FILE)
@@ -382,22 +652,15 @@ def _run_final(
     )
 
     locked = json.loads(SELECTION_FILE.read_text())["two_tower"]
-    overrides = {
-        key: value
-        for key, value in locked.items()
-        if key
-        in {
-            "use_text",
-            "use_image",
-            "use_tag",
-            "use_user_id_embedding",
-            "use_item_id_residual",
-            "history_pooling",
-            "embedding_dim",
-            "temperature",
-            "learning_rate",
-        }
-    }
+    # Every hyperparameter the lock recorded, filtered by what the config
+    # accepts rather than by a hand-maintained allow-list. An allow-list drops
+    # silently: add a field to TwoTowerConfig, forget to list it here, and the
+    # final refit uses the YAML default while the lock says otherwise. The
+    # record also carries metrics and bookkeeping, which are not fields.
+    from omnirank.models.two_tower import TwoTowerConfig
+
+    accepted = {field.name for field in dataclasses.fields(TwoTowerConfig)}
+    overrides = {key: value for key, value in locked.items() if key in accepted}
     fit_splits, target = boundary_for_stage("final")
     logger.info(
         "phase5.final_started",
@@ -446,6 +709,20 @@ def _run_final(
     index.save(index_path)
     write_json({**index_metadata, "exactness": exactness}, destination / "index_manifest.json")
 
+    _register_final_model(
+        retriever,
+        result,
+        config,
+        version=version,
+        index_version=index.index_version,
+        fit_splits=fit_splits,
+        target=target,
+        seed=config.seed,
+        overwrite=args.overwrite,
+        logger=logger,
+        run_id=run_id,
+    )
+
     # Cold metrics, reported independently of the aggregate.
     slices = {item.slice_name: item.to_dict() for item in result.slices}
     cold_rows = [
@@ -486,6 +763,92 @@ def _run_final(
     return True
 
 
+def _register_final_model(
+    retriever: Any,
+    result: Any,
+    config: Any,
+    *,
+    version: str,
+    index_version: int,
+    fit_splits: tuple[str, ...],
+    target: str,
+    seed: int,
+    overwrite: bool,
+    logger: Any,
+    run_id: str,
+) -> None:
+    """Save the final retriever and write its registry manifest.
+
+    Registered here rather than through ``register_baseline`` because that
+    helper pins ``feature_version`` to the Phase 3 constant and declares
+    ``required_index_version=1``. Both are wrong for this model: its features
+    come from the multimodal store and it is paired with a real FAISS build, so
+    a manifest carrying the defaults would assert compatibility it cannot back.
+    """
+    from omnirank.artifacts.metadata import (
+        ArtifactType,
+        SupportedDevice,
+        build_metadata,
+    )
+    from omnirank.artifacts.registry import ArtifactRegistry
+
+    artifact_root = Path(config.paths.artifact_root)
+    artifact_dir = Path(config.paths.models_dir) / config.data.dataset_name / "two_tower" / version
+    retriever.save(artifact_dir)
+
+    # Project-root relative, matching every other registered model. The
+    # registry would happily resolve an artifact-root-relative path, but the
+    # gate and the serving loader both join against the project root, so a
+    # different convention here produces a manifest that points nowhere.
+    relative = artifact_dir
+
+    flat = result.strict.flat()
+    cold = {item.slice_name: item for item in result.slices if "cold" in item.slice_name}
+    metrics = {
+        f"{target}_{key}": float(value) for key, value in flat.items() if key in PRIMARY_METRICS
+    }
+    for name, item in sorted(cold.items()):
+        payload = item.to_dict()
+        for key in ("recall@20", "ndcg@20"):
+            if key in payload:
+                metrics[f"{target}_{name}_{key}"] = float(payload[key])
+
+    metadata = build_metadata(
+        model_name="two_tower",
+        model_version=version,
+        model_type=ArtifactType.RETRIEVAL_MODEL,
+        training_data_version=(
+            f"{retriever.dataset_identity.get('dataset_name')}@"
+            f"{retriever.dataset_identity.get('dataset_version')}"
+        ),
+        feature_version=str(retriever.store.feature_version),
+        configuration_hash=retriever.config.label,
+        random_seed=seed,
+        supported_device=SupportedDevice.ANY,
+        required_index_version=index_version,
+        metrics=metrics,
+        artifact_path=str(relative),
+        id_mapping_fingerprints={"item": retriever.mapping_checksum},
+        notes=(
+            f"stage=final | fit_splits={'+'.join(fit_splits)} | target={target} | "
+            f"protocol=full_catalogue | warm_items={retriever.catalogue.warm_count} | "
+            f"cold_items={retriever.catalogue.cold_count} | "
+            f"feature_manifest={retriever.store.manifest_checksum()[:16]} | "
+            f"trained_on_device={retriever.device}"
+        ),
+    )
+    registry = ArtifactRegistry(Path(config.paths.metadata_dir), artifact_root=artifact_root)
+    manifest_path = registry.register(metadata, overwrite=overwrite)
+    logger.info(
+        "phase5.final_registered",
+        run_id=run_id,
+        artifact=metadata.key,
+        manifest=str(manifest_path),
+        payload=str(artifact_dir),
+        index_version=index_version,
+    )
+
+
 def _run_report(logger: Any, run_id: str) -> bool:
     """Assemble the Phase 5 tables from what actually ran."""
     if not (PHASE_ROOT / "ablation_results.csv").is_file():
@@ -495,7 +858,30 @@ def _run_report(logger: Any, run_id: str) -> bool:
             detail="Run --stage rolling-selection first.",
         )
         return False
-    logger.info("phase5.report_written", run_id=run_id, output=str(PHASE_ROOT))
+    # Delegated rather than duplicated: the generator reads every metric file
+    # in this directory, and a second assembler here would be a second place
+    # for the report and the numbers to disagree.
+    generator = Path(__file__).resolve().parent / "generate_phase5_report.py"
+    completed = subprocess.run(  # noqa: S603 - fixed path, no shell, no user input
+        [sys.executable, str(generator)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        logger.error(
+            "phase5.report_failed",
+            run_id=run_id,
+            returncode=completed.returncode,
+            stderr=completed.stderr.strip()[:400],
+        )
+        return False
+    logger.info(
+        "phase5.report_written",
+        run_id=run_id,
+        output=str(PHASE_ROOT),
+        detail=completed.stdout.strip().replace("\n", "; "),
+    )
     return True
 
 

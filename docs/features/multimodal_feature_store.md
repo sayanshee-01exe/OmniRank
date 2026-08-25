@@ -41,8 +41,8 @@ An item may have text, image, both, or neither. `get_batch` returns zero-filled
 rows for missing modalities **and** a per-item mask:
 
 ```python
-batch.text            # (rows, dim) — zeros where absent
-batch.text_mask       # (rows,)     — False where absent
+batch.text  # (rows, dim) — zeros where absent
+batch.text_mask  # (rows,)     — False where absent
 ```
 
 The zeros are a placeholder the model must gate on the mask. A model that reads

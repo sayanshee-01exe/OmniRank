@@ -5,6 +5,8 @@
 | [`candidate_aggregation.md`](candidate_aggregation.md) | The three fusion strategies, over-retrieval, and the audit trail |
 | [`reciprocal_rank_fusion.md`](reciprocal_rank_fusion.md) | The RRF arithmetic, choosing `c`, and why rank beats score |
 | [`faiss_index.md`](faiss_index.md) | Exactness checking, identity enforcement, bounded exclusion search |
+| [`two_tower_faiss.md`](two_tower_faiss.md) | Indexing two-tower embeddings, tie-aware brute-force verification |
+| [`five_source_fusion.md`](five_source_fusion.md) | Adding the two-tower to the blend, and what it actually contributes |
 
 ## Implementation status
 

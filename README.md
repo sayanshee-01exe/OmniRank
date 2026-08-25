@@ -2,14 +2,23 @@
 
 A production-oriented, multi-stage, multimodal recommendation system.
 
-> **Status: Phase 3 (offline evaluation and baselines) complete.**
-> The repository contains the Phase 1 foundation, the Phase 2 data pipeline, and
-> a full offline evaluation framework with two trained baselines — time-decayed
-> popularity and BPR matrix factorization — measured on the **real PixelRec50K
-> dataset** under a full-catalogue protocol.
-> **No neural retrieval, ranking, or serving model exists.** Recommendation
-> endpoints still return HTTP 501, and every reported number comes from a real
-> run recorded in `reports/metrics/phase_03/`.
+> **Status: Phase 5 (multimodal two-tower retrieval and cold-start) complete.**
+> Five candidate generators are trained, registered and evaluated on the **real
+> PixelRec50K dataset** under a full-catalogue protocol: time-decayed
+> popularity, BPR matrix factorization, LightGCN, SASRec, and a multimodal
+> two-tower retriever that represents items from content and so can return
+> items with **no training interactions at all**.
+>
+> The blend's count of cold-target users it cannot serve at any depth goes from
+> 724 to **zero**. The two-tower's accuracy contribution is much smaller: a
+> statistically significant fusion gain on both Recall@20 and NDCG@20, but one
+> of at most 0.00034 in absolute terms. Standalone, it is significantly *below*
+> LightGCN.
+> See [`docs/phase_reports/phase_05_report.md`](docs/phase_reports/phase_05_report.md).
+>
+> **No ranker, reranker, or serving model exists.** Recommendation endpoints
+> still return HTTP 501, and every reported number comes from a real run
+> recorded under `reports/metrics/`.
 
 ---
 
@@ -55,7 +64,7 @@ Candidate generation
 ├── Matrix factorization baseline    ✅ Phase 3
 ├── LightGCN collaborative retrieval ✅ Phase 4
 ├── SASRec sequential retrieval      ✅ Phase 4
-└── Multimodal two-tower retrieval   (Phase 5)
+└── Multimodal two-tower retrieval ✅ Phase 5
         │
         ▼
 Candidate aggregation and deduplication   ✅ Phase 4
@@ -116,7 +125,9 @@ Detailed diagrams: [`docs/architecture/system_architecture.md`](docs/architectur
 | **Candidate aggregation (3 strategies)** | ✅ Implemented | `src/omnirank/retrieval/aggregation.py` |
 | **Vector index (FAISS)** | ✅ Implemented | `src/omnirank/retrieval/faiss_index.py` |
 | **Rolling temporal validation** | ✅ Implemented | `src/omnirank/data/rolling.py` |
-| Multimodal two-tower retrieval | 📋 Interface only | `src/omnirank/models/two_tower/` |
+| **Multimodal two-tower retrieval** | ✅ Implemented | `src/omnirank/models/two_tower/` |
+| **Multimodal feature store** | ✅ Implemented | `src/omnirank/features/multimodal_store.py` |
+| **Cold-item retrieval and evaluation** | ✅ Implemented | `src/omnirank/models/two_tower/catalogue.py` |
 | Ranker and reranker | 📋 Interface only | `src/omnirank/models/base.py` |
 | Database and cache clients | 📋 Protocol only | `src/omnirank/{database,cache}/` |
 | Prometheus / Grafana, Kubernetes, streaming | ❌ Deferred | — |
@@ -125,7 +136,8 @@ Detailed diagrams: [`docs/architecture/system_architecture.md`](docs/architectur
 
 ## Planned recommendation models
 
-Popularity and BPR (Phase 3) and LightGCN and SASRec (Phase 4) are implemented. The rest are listed
+Popularity and BPR (Phase 3), LightGCN and SASRec (Phase 4), and the multimodal two-tower
+(Phase 5) are implemented. The rest are listed
 with the phase that delivers them and the baseline each must beat ([ADR-007](docs/adr/ADR-007-baselines-before-advanced-models.md)).
 
 | Model | Kind | Phase | Must beat |
@@ -135,9 +147,21 @@ with the phase that delivers them and the baseline each must beat ([ADR-007](doc
 | LightGCN | graph collaborative | 4 | matrix factorization |
 | SASRec | sequential | 4 | matrix factorization |
 | Blended retriever (RRF and friends) | fusion | 4 | its own best single source |
-| Two-tower multimodal | content + collaborative | 5 | LightGCN on cold items |
+| Two-tower multimodal | content + collaborative | 5 | LightGCN on cold items — **not met, see below** |
 | LightGBM LambdaRank | learning-to-rank | 6 | best single retriever |
 | MMR | diversity reranking | 6 | ranker, on diversity at equal NDCG |
+
+> **The two-tower did not meet its stated bar.** It was required to beat
+> LightGCN on cold items. Its cold Recall@20 is 0.000441 against LightGCN's
+> 0.001322 — it did not.
+>
+> What it does instead is *reach* cold items at all. LightGCN cannot return an
+> item it never saw during fitting, so 724 cold-target users are unservable by
+> it at any depth; the two-tower serves all of them. That is a different
+> property from ranking the reachable ones better, and it is recorded here as
+> what actually happened rather than as the bar being met. The full accounting,
+> with bootstrap intervals, is in
+> [the Phase 5 report](docs/phase_reports/phase_05_report.md).
 
 ## Repository structure
 

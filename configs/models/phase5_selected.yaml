@@ -1,0 +1,77 @@
+# ---------------------------------------------------------------------------
+# Phase 5 SELECTED configuration.
+#
+# GENERATED from reports/metrics/phase_05/selected_configuration.json, which
+# was locked before any test metric was read. This file records what was
+# actually chosen; configs/models/two_tower.yaml holds development defaults
+# and is a different thing entirely.
+#
+# DO NOT HAND-EDIT. Re-select, then run:
+#     python scripts/generate_phase5_configs.py
+# ---------------------------------------------------------------------------
+models:
+  candidate_generators:
+    two_tower:
+      enabled: false
+      phase: 5
+      top_k: 300
+      embedding_dim: 128
+      text_projection_dim: 128
+      image_projection_dim: 128
+      user_id_embedding_dim: 64
+      item_id_embedding_dim: 64
+      tag_embedding_dim: 32
+      hidden_dims: [256, 128]
+      activation: gelu
+      history_pooling: mean
+      recency_decay: 0.9
+      maximum_history_length: 50
+      modality_fusion: gated
+      use_text: true
+      use_image: true
+      use_tag: true
+      use_user_id_embedding: true
+      use_item_id_residual: false
+      l2_normalize: true
+      temperature: 0.07
+      mask_false_negatives: true
+      learning_rate: 0.001
+      weight_decay: 0.0001
+      batch_size: 256
+      max_epochs: 10
+      early_stopping_patience: 3
+      gradient_clip_norm: 1
+      evaluation_user_batch_size: 256
+      seed: 42
+
+selection:
+  ablation: mean_pooling
+  selected_by: two stage: ablation screen on the train->validation boundary, then confirmation across rolling folds; chosen on mean fold strict ndcg@20 with the worst fold as tie-breaker
+  fit_splits: [train]
+  target_split: validation
+  configuration_hash: e66e40ca5f0af9016061fdc62bb152e0dfd0f9197678b36ad355737a6c05e299
+
+dataset_identity:
+  data_git_commit: 0192d4905ff439fac4ebf6daecfd3285bc5aee34
+  dataset_configuration_hash: 0c601865de162e1f31ff95ec5bed5d1bf24b97d8b1a1cc178ead254e761c56e4
+  dataset_manifest_sha256: 586fd66a82e7c56708e0b3547f37a5f1da75ed6472976d773eedfc9c97a2dfe0
+  dataset_name: pixelrec50k
+  dataset_version: v1
+  mapping_version: 1
+  ordering_field: timestamp
+  pipeline_version: 2.0.0
+  schema_version: 2
+  split_strategy: per_user_leave_last_n
+  split_version: 1
+  subset_users: null
+
+# Validation metrics recorded at selection time, for provenance only.
+# These are NOT test metrics.
+#
+#   strict ndcg@20   = 0.00031368
+#   strict recall@20 = 0.00078
+#   cold ndcg@20     = 0.0
+#
+# The identity residual was measured to zero cold retrieval AND lower warm
+# NDCG, so the selected configuration does not use it. See
+# docs/phase_reports/phase_05_report.md.

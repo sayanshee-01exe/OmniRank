@@ -24,13 +24,12 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
 
 from omnirank.core.exceptions import ArtifactValidationError, DataError
 from omnirank.core.logging import get_logger
-from omnirank.models.two_tower.catalogue import RetrievalCatalogue
 from omnirank.retrieval.faiss_index import (
     FLAT_IP,
     INNER_PRODUCT,
@@ -38,6 +37,9 @@ from omnirank.retrieval.faiss_index import (
     brute_force_top_k,
     embedding_checksum,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from omnirank.models.two_tower.catalogue import RetrievalCatalogue
 
 logger = get_logger(__name__)
 
@@ -138,6 +140,11 @@ def load_item_embeddings(
             )
     manifest = json.loads(manifest_path.read_text())
     embeddings = np.load(matrix_path, mmap_mode="r")
+    # Imported here, not at module scope. `omnirank.models.two_tower`'s
+    # package __init__ pulls torch, and this module is otherwise light
+    # enough for an install that only serves an already-built index.
+    from omnirank.models.two_tower.catalogue import RetrievalCatalogue
+
     catalogue, _ = RetrievalCatalogue.load(source)
 
     if verify:

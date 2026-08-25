@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import json
 import sys
 import time
 from pathlib import Path
@@ -30,7 +29,6 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import numpy as np
 
 from omnirank.core.config import load_config
 from omnirank.core.exceptions import ConfigurationError, OmniRankError
@@ -59,6 +57,7 @@ REGISTERED = {
     "matrix_factorization": "phase3-mf-final",
     "lightgcn": "phase4-lightgcn-final",
     "sasrec": "phase5-sasrec-final",
+    "two_tower": "phase5-two-tower-final",
 }
 
 
@@ -100,60 +99,36 @@ def _load_registered(name: str, config: Any, device: str) -> Any:
     return SASRec.load(path, device=device)
 
 
-def _fit_two_tower(dataset: Any, args: argparse.Namespace, fit_splits: tuple[str, ...]) -> Any:
-    """Train the locked two-tower configuration and wrap it for retrieval."""
-    import yaml
+def _load_two_tower(config: Any, args: argparse.Namespace) -> Any:
+    """Load the registered final two-tower, beside its feature store.
 
-    from omnirank.models.two_tower import TwoTowerConfig, TwoTowerRetriever
-    from omnirank.retrieval.runner import fit_two_tower, load_item_tags, load_sequences
+    Loaded, not refitted, for the same reason the other four sources are: a
+    fusion number and a single-source number in the same report must describe
+    the same model. Refitting produced an instance that *should* have matched
+    the registered one and, since the seeding fix, actually would -- but
+    "should" is not "verified", and there is no reason to spend fifteen minutes
+    reintroducing the doubt.
+    """
+    from omnirank.features.multimodal_store import MultimodalFeatureStore
+    from omnirank.models.two_tower import TwoTowerRetriever
 
-    selection = PHASE_ROOT / "selected_configuration.json"
-    if not selection.is_file():
-        raise OmniRankError(f"No locked two-tower configuration at {selection}")
-    locked = json.loads(selection.read_text())["two_tower"]
-
-    raw = yaml.safe_load(Path("configs/models/two_tower.yaml").read_text())["two_tower"]
-    raw.update(
-        {
-            key: value
-            for key, value in locked.items()
-            if key in set(TwoTowerConfig.__dataclass_fields__)
-        }
+    path = (
+        Path(config.paths.models_dir) / config.data.dataset_name / TWO_TOWER / REGISTERED[TWO_TOWER]
     )
-    raw["max_epochs"] = args.epochs
-    raw["device"] = args.device
-    (network, store, _), _ = fit_two_tower(
-        dataset,
-        fit_splits,
-        TwoTowerConfig(**raw),
-        processed_root=PROCESSED,
-        device=args.device,
-        subset_users=args.subset_users,
-    )
-
-    tags, _ = load_item_tags(PROCESSED, dataset.num_items)
-    sequences = load_sequences(PROCESSED, fit_splits)
-    if args.subset_users is not None:
-        sequences = sequences[sequences["internal_user_id"] < args.subset_users]
-    histories: dict[int, list[int]] = {}
-    warm = np.zeros(dataset.num_items, dtype=bool)
-    for user, history, target in zip(
-        sequences["internal_user_id"],
-        sequences["item_sequence"],
-        sequences["target_item"],
-        strict=True,
-    ):
-        combined = [*list(history), int(target)]
-        key = int(user)
-        if key not in histories or len(combined) > len(histories[key]):
-            histories[key] = combined
-        warm[list(history)] = True
-        warm[int(target)] = True
-
-    retriever = TwoTowerRetriever.from_trained(
-        network, store, dataset, histories, warm, tags, device=args.device
-    )
+    if not path.is_dir():
+        raise OmniRankError(
+            f"The final two-tower is not registered at {path}. "
+            "Run: python scripts/compare_multimodal_retrievers.py --stage final"
+        )
+    store = MultimodalFeatureStore(Path(PROCESSED) / "features")
+    retriever = TwoTowerRetriever.load(path, store=store, device=args.device)
     retriever.export_item_embeddings()
+    get_logger("omnirank.fusion").info(
+        "fusion.two_tower_loaded",
+        path=str(path),
+        warm=retriever.catalogue.warm_count,
+        cold=retriever.catalogue.cold_count,
+    )
     return retriever
 
 
@@ -166,8 +141,14 @@ def _score(
     target: str,
     kind: str,
     sources: str,
+    per_user_out: dict[str, dict[str, dict[str, float]]] | None = None,
 ) -> dict[str, Any]:
-    """Evaluate one system through the shared harness."""
+    """Evaluate one system through the shared harness.
+
+    ``per_user_out`` collects the per-user metric maps. A paired bootstrap
+    needs them, and recomputing them by scoring twice would risk the interval
+    describing a different evaluation from the point estimate beside it.
+    """
     started = time.perf_counter()
     result = run_experiment(
         model,
@@ -182,6 +163,8 @@ def _score(
         bootstrap=False,
     )
     flat = result.strict.flat()
+    if per_user_out is not None:
+        per_user_out[system] = dict(result.strict.per_user)
     slices = {item.slice_name: item.to_dict() for item in result.slices}
     cold = slices.get("items_cold_start", {})
     return {
@@ -199,6 +182,80 @@ def _score(
         "unreachable_cold_users": slices.get("targets_unreachable_cold", {}).get("users", 0),
         "evaluation_seconds": round(time.perf_counter() - started, 1),
     }
+
+
+#: Comparisons the phase actually turns on. Each is (challenger, baseline).
+BOOTSTRAP_PAIRS = (
+    ("five_source_rrf", "four_source_rrf"),
+    ("five_source_rrf", "lightgcn"),
+    ("lightgcn_two_tower", "lightgcn"),
+    ("two_tower", "lightgcn"),
+)
+
+#: Resamples. 1000 is the project default and is enough for a 95% interval
+#: whose width is reported to three decimals.
+BOOTSTRAP_SAMPLES = 1000
+
+
+def _write_bootstrap(
+    per_user: dict[str, dict[str, dict[str, float]]], logger: Any, run_id: str
+) -> None:
+    """Paired bootstrap intervals for the comparisons that carry the phase.
+
+    Paired, over shared users, with the same resampled indices applied to both
+    systems -- an unpaired interval over the same numbers would be far wider
+    and would be measuring user variance rather than the difference.
+    """
+    from omnirank.evaluation.bootstrap import paired_bootstrap_delta
+
+    rows: list[dict[str, Any]] = []
+    for challenger, baseline in BOOTSTRAP_PAIRS:
+        if challenger not in per_user or baseline not in per_user:
+            logger.warning(
+                "fusion.bootstrap_skipped",
+                run_id=run_id,
+                challenger=challenger,
+                baseline=baseline,
+                reason="one system was not scored in this run",
+            )
+            continue
+        for metric in ("recall@20", "ndcg@20"):
+            try:
+                interval = paired_bootstrap_delta(
+                    per_user[challenger],
+                    per_user[baseline],
+                    metric,
+                    samples=BOOTSTRAP_SAMPLES,
+                )
+            except OmniRankError as exc:
+                logger.warning(
+                    "fusion.bootstrap_failed",
+                    run_id=run_id,
+                    challenger=challenger,
+                    baseline=baseline,
+                    metric=metric,
+                    reason=str(exc),
+                )
+                continue
+            rows.append(
+                {
+                    "challenger": challenger,
+                    "baseline": baseline,
+                    "metric": metric,
+                    "delta": round(interval.point_estimate, 8),
+                    "ci_lower": round(interval.lower, 8),
+                    "ci_upper": round(interval.upper, 8),
+                    "confidence_level": interval.confidence_level,
+                    "samples": interval.samples,
+                    "users": interval.users,
+                    # The only reading that matters: an interval straddling
+                    # zero is not evidence of a difference, however large the
+                    # point estimate looks.
+                    "excludes_zero": bool(interval.lower > 0 or interval.upper < 0),
+                }
+            )
+            logger.info("fusion.bootstrap", run_id=run_id, **rows[-1])
+    write_csv(rows, PHASE_ROOT / "bootstrap_deltas.csv")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -230,14 +287,17 @@ def main(argv: list[str] | None = None) -> int:
                 name: _load_registered(name, config, args.device) for name in COLLABORATIVE
             }
             logger.info("fusion.loaded_registered", run_id=run_id, sources=sorted(models))
-            models[TWO_TOWER] = _fit_two_tower(dataset, args, fit_splits)
+            models[TWO_TOWER] = _load_two_tower(config, args)
         except OmniRankError as exc:
             logger.error("fusion.setup_failed", run_id=run_id, reason=str(exc))
             return RUN_ERROR_EXIT
 
         rows: list[dict[str, Any]] = []
+        per_user: dict[str, dict[str, dict[str, float]]] = {}
         for name, model in models.items():
-            rows.append(_score(name, model, dataset, config, fit_splits, target, "single", name))
+            rows.append(
+                _score(name, model, dataset, config, fit_splits, target, "single", name, per_user)
+            )
             logger.info(
                 "fusion.solo",
                 run_id=run_id,
@@ -259,7 +319,15 @@ def main(argv: list[str] | None = None) -> int:
             )
             rows.append(
                 _score(
-                    label, blend, dataset, config, fit_splits, target, "blend", "+".join(members)
+                    label,
+                    blend,
+                    dataset,
+                    config,
+                    fit_splits,
+                    target,
+                    "blend",
+                    "+".join(members),
+                    per_user,
                 )
             )
             logger.info(
@@ -268,6 +336,8 @@ def main(argv: list[str] | None = None) -> int:
                 **{k: rows[-1][k] for k in ("system", "ndcg@20", "cold_recall@20")},
             )
             write_csv(rows, PHASE_ROOT / "five_source_fusion_metrics.csv")
+
+        _write_bootstrap(per_user, logger, run_id)
 
         # Diagnostics: does the two-tower reach what the others cannot?
         users = sorted(dataset.external_to_internal_users())

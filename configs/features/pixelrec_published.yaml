@@ -1,0 +1,67 @@
+# ---------------------------------------------------------------------------
+# PixelRec published multimodal vectors.
+#
+# GENERATED from data/processed/pixelrec50k/features/multimodal_feature_manifest.json.
+# DO NOT HAND-EDIT. Re-align features, then run:
+#     python scripts/generate_phase5_configs.py
+#
+# The encoder is recorded as `unknown` because PixelRec publishes these
+# vectors without documenting how they were produced. Calling them CLIP or
+# BERT embeddings would be a claim the source does not support, and every
+# downstream comparison would inherit it.
+# ---------------------------------------------------------------------------
+features:
+  name: pixelrec_published_multimodal
+  version: 1
+
+  dataset:
+    name: pixelrec50k
+    version: v1
+    catalogue_items: 69347
+
+  text:
+    enabled: true
+    path: data/processed/pixelrec50k/features/text_features.npy
+    dimension: 1024
+    dtype: float32
+    encoder_identity: unknown
+    coverage: 1
+    items_matched: 69347
+
+  image:
+    enabled: true
+    path: data/processed/pixelrec50k/features/image_features.npy
+    dimension: 1024
+    dtype: float32
+    encoder_identity: unknown
+    coverage: 1
+    items_matched: 69347
+
+  storage:
+    type: memory_map
+    text_index_path: data/processed/pixelrec50k/features/text_feature_index.parquet
+    image_index_path: data/processed/pixelrec50k/features/image_feature_index.parquet
+    modality_mask_path: data/processed/pixelrec50k/features/modality_mask.parquet
+
+  modality_counts:
+    both: 69347
+    text_only: 0
+    image_only: 0
+    neither: 0
+
+  normalization:
+    # Raw published vectors. The source documents no normalisation, so
+    # none is claimed and none is applied; the model normalises its own
+    # outputs instead.
+    input_vectors_normalized: false
+
+  compatibility:
+    feature_manifest_checksum: dc80bc8c54d07ebe9867fa7d2fc442e2c0468ae16298a3aa8212ae17b47679b7
+    item_mapping_checksum: 235fcff3343a651150e8f220bfebc9bdb986e78ab47b80c3d025a8259048bc3c
+    dataset_manifest_checksum: 586fd66a82e7c56708e0b3547f37a5f1da75ed6472976d773eedfc9c97a2dfe0
+    dataset_configuration_hash: 0c601865de162e1f31ff95ec5bed5d1bf24b97d8b1a1cc178ead254e761c56e4
+
+  licence: >-
+    PixelRec is Westlake Representation Learning Lab, non-commercial
+    research and education only. The aligned matrices are derived data,
+    are git-ignored, and must not be redistributed.

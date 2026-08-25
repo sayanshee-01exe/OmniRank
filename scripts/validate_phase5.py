@@ -177,7 +177,7 @@ def check_model_class(result: GateResult) -> None:
     """The package exposes a fitted-capable CandidateGenerator."""
     try:
         from omnirank.models.base import CandidateGenerator
-        from omnirank.models.two_tower import MultimodalTwoTower  # type: ignore[attr-defined]
+        from omnirank.models.two_tower import MultimodalTwoTower
     except Exception as exc:  # any import failure is the same verdict
         result.add(
             "MultimodalTwoTower importable",
@@ -344,10 +344,14 @@ def check_smoke_recommendation(result: GateResult, metadata: dict[str, Any] | No
 
     artifact_path = PROJECT_ROOT / str(metadata.get("artifact_path", ""))
     try:
-        from omnirank.models.two_tower import MultimodalTwoTower  # type: ignore[attr-defined]
+        from omnirank.features.multimodal_store import MultimodalFeatureStore
+        from omnirank.models.two_tower import TwoTowerRetriever
 
-        model = MultimodalTwoTower.load(artifact_path, device="cpu")
-        users = list(getattr(model, "known_users", []) or [])[:1]
+        # The retriever, not the network: item vectors come from the feature
+        # store, so a smoke recommendation needs both halves.
+        store = MultimodalFeatureStore(PROJECT_ROOT / FEATURE_MANIFEST.rsplit("/", 1)[0])
+        model = TwoTowerRetriever.load(artifact_path, store=store, device="cpu")
+        users = sorted(model._external_to_internal_user)[:1]
         recommendations = model.recommend(users[0], 5) if users else []
         result.add(
             "saved-model smoke recommendation",
@@ -456,6 +460,99 @@ def check_report_claims(result: GateResult) -> None:
     )
 
 
+def check_ci_job(result: GateResult) -> None:
+    """The multimodal CI job exists and invokes the gate without a pipe.
+
+    `python ... | tee` reports tee's exit status, so a failing validator would
+    look like a passing job. The gate checks its own invocation because that
+    failure is invisible from inside CI.
+    """
+    workflow = PROJECT_ROOT / ".github/workflows/ci.yml"
+    if not workflow.is_file():
+        result.add("multimodal CI job", False, detail="no .github/workflows/ci.yml")
+        return
+    text = workflow.read_text()
+    result.add(
+        "multimodal CI job",
+        "multimodal-retrieval:" in text,
+        detail=(
+            "multimodal-retrieval job present"
+            if "multimodal-retrieval:" in text
+            else "no multimodal-retrieval job"
+        ),
+    )
+    invocations = [line.strip() for line in text.splitlines() if "validate_phase5.py" in line]
+    piped = [line for line in invocations if "|" in line and "pipefail" not in line]
+    result.add(
+        "CI invokes the gate without swallowing its exit code",
+        bool(invocations) and not piped,
+        detail=(
+            "invoked directly"
+            if invocations and not piped
+            else f"piped without pipefail: {piped}"
+            if piped
+            else "validator is never invoked in CI"
+        ),
+    )
+
+
+def check_synthetic_evidence(result: GateResult) -> None:
+    """The fixture tests CI can actually run."""
+    required = (
+        "tests/unit/models/two_tower/test_generator.py",
+        "tests/unit/retrieval/test_two_tower_index.py",
+        "tests/integration/test_two_tower_training.py",
+        "tests/integration/test_phase5_retrieval.py",
+    )
+    _check_paths(result, "synthetic Phase 5 tests", required, critical=True)
+
+    # The mandatory cold-item workflow must exist as an executable test, not
+    # only as a claim in a document.
+    cold = PROJECT_ROOT / "tests/integration/test_phase5_retrieval.py"
+    if cold.is_file():
+        text = cold.read_text()
+        result.add(
+            "cold-item integration test asserts retrieval",
+            "COLD_ITEM" in text and "cold_item_catalogue" in text,
+            detail="fixture asserts a cold item is catalogued and retrieved",
+        )
+
+
+def check_real_metrics(result: GateResult) -> None:
+    """Measured outputs from real PixelRec runs, and a positive cold recall.
+
+    Documentation presence is never treated as implementation completion, so
+    these are the metric files themselves -- and the cold-recall check reads the
+    number rather than the file's existence.
+    """
+    _check_paths(result, "Phase 5 real-data metrics", REQUIRED_METRICS, critical=True)
+
+    final = PROJECT_ROOT / "reports/metrics/phase_05/two_tower_final_test_metrics.json"
+    if not final.is_file():
+        result.add(
+            "cold Recall@K is positive on real data",
+            False,
+            detail="no final test metrics to read",
+        )
+        return
+    payload = json.loads(final.read_text())
+    cold = payload.get("slices", {}).get("items_cold_start", {})
+    positive = {
+        key: cold[key]
+        for key in ("recall@5", "recall@10", "recall@20", "recall@50")
+        if cold.get(key, 0) > 0
+    }
+    result.add(
+        "cold Recall@K is positive on real data",
+        bool(positive),
+        detail=(
+            f"positive at {sorted(positive)} over {cold.get('users', 0)} cold-target users"
+            if positive
+            else "cold recall is zero at every K; Phase 5 has not met its purpose"
+        ),
+    )
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -467,6 +564,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Where to write the machine-readable gate report.",
     )
     parser.add_argument("--quiet", action="store_true", help="Only print the verdict and failures.")
+    parser.add_argument(
+        "--ci",
+        action="store_true",
+        help=(
+            "CI-safe mode: check code, configuration and synthetic evidence only. "
+            "Skips every check that needs PixelRec data, trained artifacts or "
+            "real-data reports, which CI deliberately does not have."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -476,16 +582,27 @@ def main(argv: list[str] | None = None) -> int:
     result = GateResult()
 
     try:
+        # Code, configuration and synthetic evidence: verifiable anywhere.
         check_sources(result)
         check_model_class(result)
         check_configs(result)
         check_commands(result)
-        check_evidence(result)
-        check_features(result)
-        metadata = check_artifacts(result)
-        check_compatibility(result, metadata)
-        check_smoke_recommendation(result, metadata)
-        check_report_claims(result)
+        check_ci_job(result)
+        if args.ci:
+            # CI has no PixelRec download, no trained artifacts and no
+            # real-data reports by design, so asking for them there would make
+            # the gate fail for the wrong reason. The synthetic cold-item and
+            # end-to-end tests are what CI verifies instead, and they exercise
+            # the same code paths.
+            check_synthetic_evidence(result)
+        else:
+            check_evidence(result)
+            check_features(result)
+            metadata = check_artifacts(result)
+            check_compatibility(result, metadata)
+            check_smoke_recommendation(result, metadata)
+            check_real_metrics(result)
+            check_report_claims(result)
     except Exception as exc:  # the gate itself failing is distinct
         print(f"Gate could not run: {type(exc).__name__}: {exc}", file=sys.stderr)
         return INSPECTION_ERROR_EXIT

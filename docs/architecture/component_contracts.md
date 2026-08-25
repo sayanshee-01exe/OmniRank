@@ -15,14 +15,14 @@ boundaries.
 | 5 | Temporal splitting | `data.splitting` | `Splitter`, `check_split_integrity` | 📋 P2 / ✅ checker |
 | 6 | Feature generation | `features.base` | `FeatureStore` | 📋 P2 |
 | 7 | Sequence generation | `features.base` | `SequenceBuilder` | 📋 P2 |
-| 8 | Model training | `models.baselines` | `CandidateGenerator`, `Ranker` | ✅ P3 (popularity, BPR) |
+| 8 | Model training | `models.baselines`, `models.lightgcn`, `models.sasrec`, `models.two_tower` | `CandidateGenerator`, `Ranker` | ✅ P5 (popularity, BPR, LightGCN, SASRec, two-tower) |
 | 9 | Model evaluation | `evaluation.*` | `Evaluator`, `GroundTruth`, `OfflineEvaluator` | ✅ P3 |
-| 10 | Candidate generation | `models.baselines` | `CandidateGenerator` | ✅ P3 (popularity, BPR) |
-| 11 | Candidate aggregation | `retrieval.base` | `CandidateAggregator` | 📋 P4 |
+| 10 | Candidate generation | `models.baselines`, `models.two_tower` | `CandidateGenerator` | ✅ P5 (five sources) |
+| 11 | Candidate aggregation | `retrieval.aggregation` | `CandidateAggregator` | ✅ P4 (RRF, five-source in P5) |
 | 12 | Ranking | `models.base`, `ranking.base` | `Ranker`, `FeatureBuilder` | 📋 P6 |
 | 13 | Post-ranking | `reranking.base` | `PostRankingFilter`, `Reranker` | 📋 P6 |
 | 14 | Artifact management | `artifacts` | `ArtifactMetadata`, `ArtifactRegistry` | ✅ |
-| 15 | Vector-index management | `retrieval.base` | `VectorIndex` | 📋 P4 |
+| 15 | Vector-index management | `retrieval.faiss_index`, `retrieval.two_tower_index` | `VectorIndex` | ✅ P5 (exact, verified tie-aware) |
 | 16 | Recommendation serving | `api` | FastAPI app | ✅ skeleton |
 | 17 | Interaction ingestion | `api.routes.interactions`, `database.base` | `InteractionRepository` | 📋 P2 |
 | 18 | Caching | `cache.base` | `CacheBackend`, `CacheKey` | 📋 P2 |
@@ -93,8 +93,7 @@ class CandidateGenerator(ABC):
     name: str
 
     def fit(self, data) -> None: ...
-    def recommend(self, user_id: str, k: int,
-                  context: dict | None = None) -> list[Candidate]: ...
+    def recommend(self, user_id: str, k: int, context: dict | None = None) -> list[Candidate]: ...
     def score(self, user_id: str, item_ids: list[str]) -> list[float]: ...
     def save(self, path: str | Path) -> None: ...
     @classmethod
@@ -118,8 +117,9 @@ Obligations:
 ```python
 class Ranker(ABC):
     def fit(self, features, labels, groups=None) -> None: ...
-    def rank(self, candidates: list[Candidate],
-             context: dict | None = None) -> list[RankedItem]: ...
+    def rank(
+        self, candidates: list[Candidate], context: dict | None = None
+    ) -> list[RankedItem]: ...
     def save(self, path) -> None: ...
     @classmethod
     def load(cls, path) -> Self: ...
@@ -133,8 +133,7 @@ a cached response and a freshly computed one disagree.
 
 ```python
 class Evaluator(ABC):
-    def evaluate(self, recommendations, ground_truth,
-                 k_values: list[int]) -> dict[str, float]: ...
+    def evaluate(self, recommendations, ground_truth, k_values: list[int]) -> dict[str, float]: ...
 ```
 
 Returns flat `"<metric>@<k>"` keys, stable across runs so two reports diff
@@ -145,8 +144,9 @@ mechanically. Denominator rules are in
 
 ```python
 class CandidateAggregator(ABC):
-    def aggregate(self, per_source: dict[str, Sequence[Candidate]],
-                  *, limit: int) -> AggregationResult: ...
+    def aggregate(
+        self, per_source: dict[str, Sequence[Candidate]], *, limit: int
+    ) -> AggregationResult: ...
 ```
 
 Must normalise within source before cross-source comparison, preserve every
@@ -158,6 +158,7 @@ contributing source on merged candidates, and be deterministic.
 class VectorIndex(Protocol):
     dimension: int
     index_version: int
+
     def build(self, embeddings, *, metric="inner_product") -> None: ...
     def search(self, query, k) -> tuple[list[list[int]], list[list[float]]]: ...
     def save(self, path) -> None: ...

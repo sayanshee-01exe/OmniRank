@@ -8,6 +8,9 @@
 | [`model_selection.md`](model_selection.md) | Validation/test discipline and the configuration lock |
 | [`lightgcn.md`](lightgcn.md) | Graph propagation, the `num_layers=0` ablation, isolated nodes |
 | [`sasrec.md`](sasrec.md) | Causal attention, padding, sampled BCE, and what the budget allowed |
+| [`multimodal_two_tower_core.md`](multimodal_two_tower_core.md) | The two towers, the warm-masked id residual, and the cold guarantee |
+| [`two_tower_training.md`](two_tower_training.md) | In-batch contrastive loss, false-negative masking, early stopping |
+| [`two_tower_persistence.md`](two_tower_persistence.md) | What is saved, what is checked on load, and why `weights_only` |
 
 ## Implementation status
 

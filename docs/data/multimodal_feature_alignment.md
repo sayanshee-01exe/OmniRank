@@ -99,7 +99,7 @@ must be memory-mappable rather than loaded:
 
 ```python
 matrix = np.load("features/text_features.npy", mmap_mode="r")
-vector = matrix[internal_item_id]        # row index == internal id
+vector = matrix[internal_item_id]  # row index == internal id
 ```
 
 Alternatives considered:
