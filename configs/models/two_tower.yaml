@@ -1,0 +1,87 @@
+# ---------------------------------------------------------------------------
+# Multimodal two-tower development configuration (Phase 5).
+#
+# These are DEVELOPMENT DEFAULTS, not selected hyperparameters. Nothing here has
+# been chosen on validation. The selected configuration will be written to
+# configs/models/phase5_selected.yaml by the selection stage, generated from
+# reports/metrics/phase_05/selected_configuration.json rather than hand-edited.
+#
+# Every key below is implemented and validated by TwoTowerConfig. An option that
+# is accepted but ignored is worse than one that is absent: it silently trains a
+# different model than the file describes.
+# ---------------------------------------------------------------------------
+two_tower:
+  # Shared output width of both towers. Retrieval is a dot product between
+  # them, so these cannot differ - the model refuses a mismatch.
+  embedding_dim: 128
+
+  text_projection_dim: 128
+  image_projection_dim: 128
+  user_id_embedding_dim: 64
+  # Sized to embedding_dim internally: the residual is ADDED to the content
+  # embedding, not concatenated before it, so zeroing it for a cold item leaves
+  # a well-formed content vector behind.
+  item_id_embedding_dim: 64
+  tag_embedding_dim: 32
+
+  hidden_dims: [256, 128]
+  activation: gelu          # gelu | relu
+  dropout: 0.1
+
+  history_pooling: recency_weighted_mean   # mean | recency_weighted_mean
+  # Geometric decay over history positions. 1.0 makes recency weighting
+  # identical to mean pooling, which is the ablation control.
+  recency_decay: 0.9
+  maximum_history_length: 50
+
+  # concat | gated. Gated lets the model learn to down-weight a modality that is
+  # usually absent instead of averaging noise into every item.
+  modality_fusion: gated
+
+  # Modality switches. The ablation suite is run by toggling these rather than
+  # by writing separate model classes.
+  use_text: true
+  use_image: true
+  use_tag: true
+  use_user_id_embedding: true
+  # Gated by a warm mask at encode time. A cold item's representation is exactly
+  # its content embedding; the residual is multiplied by zero, never added.
+  use_item_id_residual: true
+
+  # With L2 on, a dot product is a cosine similarity and FAISS inner product
+  # means the same thing. Recorded in model metadata because an index built
+  # under one convention and queried under the other returns confident nonsense.
+  l2_normalize: true
+
+  # InfoNCE sharpness. Lower concentrates probability on the nearest items; too
+  # low saturates the softmax and stalls learning.
+  temperature: 0.07
+  # In-batch negatives are not all negative. When a user's own history contains
+  # another row's target, the loss would push them away from an item they
+  # demonstrably like - biased towards popular items, and invisible in the loss.
+  mask_false_negatives: true
+
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  batch_size: 256
+  max_epochs: 20
+  early_stopping_patience: 3
+  gradient_clip_norm: 1.0
+
+  evaluation_user_batch_size: 256
+  seed: 42
+  device: auto              # auto | cpu | mps. Never selects CUDA.
+
+notes:
+  - >-
+    Early stopping monitors validation loss, not training loss. Stopping on
+    training loss selects the most overfit checkpoint available.
+  - >-
+    The per-epoch retrieval figure is a PROXY: it ranks each user's target
+    against the other items in a small validation subset, not against the
+    catalogue. It is a direction signal for early stopping and is not comparable
+    to a reported Recall@20.
+  - >-
+    Padding is item id `num_items`, one past the last valid id. Reusing 0 would
+    collide with a real item and train the model on content that belongs to
+    something else.

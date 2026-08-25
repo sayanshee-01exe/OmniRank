@@ -58,22 +58,20 @@ class TestImportIntegrity:
         asserting against the in-process `sys.modules` would test the run order
         rather than the package.
         """
-        skip = {
+        # Matched by prefix, not by exact name. Importing *any* submodule of a
+        # torch-backed package executes that package's `__init__`, so listing
+        # individual modules leaves a hole the moment one is added -- which is
+        # exactly how `two_tower.config` pulled torch in despite the package
+        # itself being listed.
+        skip_prefixes = (
             "omnirank.models.baselines.bpr",
             "omnirank.models.lightgcn",
-            "omnirank.models.lightgcn.model",
             "omnirank.models.sasrec",
-            "omnirank.models.sasrec.model",
+            "omnirank.models.two_tower",
             "omnirank.retrieval.blended",
             "omnirank.retrieval.runner",
-            "omnirank.models.two_tower",
-            "omnirank.models.two_tower.losses",
-            "omnirank.models.two_tower.model",
-            "omnirank.models.two_tower.training",
-            "omnirank.models.two_tower.dataset",
-            "omnirank.models.two_tower.persistence",
-        }
-        modules = [name for name in ALL_MODULES if name not in skip]
+        )
+        modules = [name for name in ALL_MODULES if not name.startswith(skip_prefixes)]
         script = (
             "import importlib, sys\n"
             f"for name in {modules!r}:\n"

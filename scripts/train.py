@@ -59,9 +59,12 @@ TRAINING_ERROR_EXIT = 3
 
 LIGHTGCN = "lightgcn"
 SASREC = "sasrec"
-MODELS = (POPULARITY, MATRIX_FACTORIZATION, LIGHTGCN, SASREC)
+TWO_TOWER = "two_tower"
+MODELS = (POPULARITY, MATRIX_FACTORIZATION, LIGHTGCN, SASREC, TWO_TOWER)
 #: Models whose hyperparameters are locked by the Phase 4 selection record.
 PHASE_4_MODELS = (LIGHTGCN, SASREC)
+#: Models whose hyperparameters are locked by the Phase 5 selection record.
+PHASE_5_MODELS = (TWO_TOWER,)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -77,8 +80,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--stage",
         default="selection",
-        choices=("selection", "final"),
-        help="selection fits train and scores validation; final fits train+validation.",
+        choices=("selection", "final", "development"),
+        help=(
+            "selection fits train and scores validation; final fits "
+            "train+validation; development fits train only and skips evaluation "
+            "and registration, for smoke runs."
+        ),
     )
     parser.add_argument("--version", required=True, help="Artifact version label.")
     parser.add_argument("--seed", type=int, default=None, help="Override the configured seed.")
@@ -123,7 +130,101 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--num-blocks", type=int, help="SASRec transformer blocks.")
     parser.add_argument("--num-heads", type=int, help="SASRec attention heads.")
     parser.add_argument("--dropout", type=float, help="SASRec dropout.")
+    # Phase 5 axes and development controls.
+    parser.add_argument(
+        "--model-config",
+        default=None,
+        help="YAML holding this model's hyperparameters (two_tower only).",
+    )
+    parser.add_argument(
+        "--subset-users",
+        type=int,
+        default=None,
+        help=(
+            "Train on the first N internal user ids only. The development path: "
+            "the full corpus is not something to start by accident."
+        ),
+    )
+    parser.add_argument("--artifact-output", default=None, help="Override the artifact directory.")
+    parser.add_argument(
+        "--max-batches-per-epoch",
+        type=int,
+        default=None,
+        help="Cap batches per epoch, for smoke runs.",
+    )
     return parser.parse_args(argv)
+
+
+def _finish_two_tower_development(
+    model: Any,
+    feature_store: Any,
+    training_history: Any,
+    dataset: Any,
+    args: argparse.Namespace,
+    config: Any,
+    logger: Any,
+    run_id: str,
+    fit_measurement: Any,
+) -> int:
+    """Persist a two-tower model and report the run.
+
+    Separate from the shared path because this milestone has no full-catalogue
+    retrieval yet, so `run_experiment` has nothing to score. Emitting a metric
+    here would mean inventing one.
+    """
+    from omnirank.models.two_tower import build_metadata, save
+
+    destination = (
+        Path(args.artifact_output)
+        if getattr(args, "artifact_output", None)
+        else Path(config.paths.models_dir) / config.data.dataset_name / args.model / args.version
+    )
+    if destination.exists() and not args.overwrite:
+        logger.error(
+            "train.version_exists",
+            run_id=run_id,
+            path=str(destination),
+            detail="Pass --overwrite to replace an existing artifact version.",
+        )
+        return CONFIG_ERROR_EXIT
+
+    history = training_history.to_dict()
+    if not args.no_register:
+        metadata = build_metadata(
+            model,
+            feature_version=feature_store.feature_version,
+            feature_manifest_checksum=feature_store.manifest_checksum(),
+            mapping_checksum=dataset.mapping_metadata.get("item_mapping_checksum", ""),
+            dataset_identity=dataset.identity.to_dict(),
+            fit_splits=("train",),
+            training_history=history,
+        )
+        save(model, destination, metadata=metadata, training_history=history)
+
+    logger.info(
+        "train.two_tower_completed",
+        run_id=run_id,
+        version=args.version,
+        registered=not args.no_register,
+        path=str(destination) if not args.no_register else None,
+        subset_users=args.subset_users,
+        examples=fit_measurement.items_processed if fit_measurement else None,
+        seconds=round(fit_measurement.seconds, 2) if fit_measurement else None,
+        peak_memory_mb=round(fit_measurement.peak_memory_mb, 1) if fit_measurement else None,
+        device=history.get("device"),
+        epochs_run=history.get("epochs_run"),
+        best_epoch=history.get("best_epoch"),
+        first_loss=round(history["train_loss"][0], 6) if history.get("train_loss") else None,
+        final_loss=round(history["train_loss"][-1], 6) if history.get("train_loss") else None,
+        validation_loss=(
+            round(history["validation_loss"][-1], 6) if history.get("validation_loss") else None
+        ),
+        note=(
+            "Model core only. Full-catalogue retrieval and evaluation land in "
+            "the next Phase 5 milestone."
+        ),
+    )
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -144,7 +245,13 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(config.logging, force=True)
     logger = get_logger("omnirank.train")
     seed = args.seed if args.seed is not None else config.seed
-    fit_splits, target_split = boundary_for_stage(args.stage)
+    # A development run fits on training only and never reads validation as a
+    # target, so a smoke run cannot consume a held-out split by accident.
+    fit_splits, target_split = (
+        (("train",), "validation")
+        if args.stage == "development"
+        else boundary_for_stage(args.stage)
+    )
     dataset_config = config.data.dataset
     if dataset_config is None:
         print("The selected profile declares no data.dataset block.", file=sys.stderr)
@@ -245,6 +352,62 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 configuration = model_config.to_dict()
                 device = model.device
+            elif args.model == TWO_TOWER:
+                import yaml
+
+                from omnirank.models.two_tower import TwoTowerConfig
+                from omnirank.retrieval.runner import fit_two_tower
+
+                # Read from a dedicated YAML rather than the AppConfig tree:
+                # the two-tower search space is Phase 5 experimental surface and
+                # adding an axis should not require a schema change.
+                source = Path(args.model_config or "configs/models/two_tower.yaml")
+                if not source.is_file():
+                    logger.error("train.model_config_missing", run_id=run_id, expected=str(source))
+                    return CONFIG_ERROR_EXIT
+                raw = yaml.safe_load(source.read_text()).get("two_tower", {})
+                raw["seed"] = seed
+                if args.device != "auto":
+                    raw["device"] = args.device
+                if args.embedding_dim:
+                    raw["embedding_dim"] = args.embedding_dim
+                if args.epochs:
+                    raw["max_epochs"] = args.epochs
+                if args.batch_size:
+                    raw["batch_size"] = args.batch_size
+                if args.learning_rate is not None:
+                    raw["learning_rate"] = args.learning_rate
+                model_config = TwoTowerConfig(**raw)
+
+                bundle, fit_measurement = fit_two_tower(
+                    dataset,
+                    fit_splits,
+                    model_config,
+                    processed_root=Path(dataset_config.processed_dir),
+                    device=args.device,
+                    subset_users=args.subset_users,
+                    max_batches_per_epoch=args.max_batches_per_epoch,
+                    validation_splits=("validation",) if args.stage == "development" else (),
+                )
+                model, feature_store, training_history = bundle
+                configuration = model_config.to_dict()
+                device = str(next(model.parameters()).device)
+
+                # This milestone delivers the model core only: there is no
+                # full-catalogue retrieval path yet, so the shared evaluation
+                # harness cannot score it. Persisting and reporting stops here
+                # rather than pretending an evaluation happened.
+                return _finish_two_tower_development(
+                    model,
+                    feature_store,
+                    training_history,
+                    dataset,
+                    args,
+                    config,
+                    logger,
+                    run_id,
+                    fit_measurement,
+                )
             elif args.model == SASREC:
                 from omnirank.models.sasrec import SASRecConfig
                 from omnirank.retrieval.runner import fit_sasrec
