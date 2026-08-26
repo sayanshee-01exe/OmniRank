@@ -27,7 +27,7 @@ import torch
 from omnirank.core.exceptions import ArtifactValidationError, DataError
 from omnirank.core.logging import get_logger
 from omnirank.features.multimodal_store import MultimodalFeatureStore
-from omnirank.models.base import Candidate, CandidateGenerator
+from omnirank.models.base import Candidate, CandidateGenerator, ScoredCandidate
 from omnirank.models.baselines.bpr import resolve_torch_device
 from omnirank.models.two_tower.catalogue import RetrievalCatalogue, build_catalogue
 from omnirank.models.two_tower.config import TwoTowerConfig
@@ -421,6 +421,54 @@ class TwoTowerRetriever(CandidateGenerator):
             for (user, _), row in zip(chunk, items, strict=True):
                 results[user] = [
                     self._internal_to_external[int(item)] for item in row if item != EMPTY_SLOT
+                ]
+        return results
+
+    def recommend_batch_scored(
+        self, user_ids: list[str], k: int, *, filter_seen: bool = True
+    ) -> dict[str, list[ScoredCandidate]]:
+        """Batch retrieval keeping the cosine similarity behind each position.
+
+        ``_search`` returns scores alongside items and :meth:`recommend_batch`
+        drops them. They are the dot product of two L2-normalised embeddings, so
+        they are bounded in [-1, 1] and comparable *within* this source -- which
+        is exactly what a ranking feature needs.
+        """
+        self.ensure_fitted()
+        if k < 1:
+            raise DataError("k must be >= 1", k=k)
+        results: dict[str, list[ScoredCandidate]] = {}
+        known: list[tuple[str, int]] = []
+        for user in user_ids:
+            internal = self._external_to_internal_user.get(user)
+            if internal is None or not self._histories.get(internal):
+                results[user] = []
+            else:
+                known.append((user, internal))
+
+        batch = self.config.evaluation_user_batch_size
+        for start in range(0, len(known), batch):
+            chunk = known[start : start + batch]
+            queries = self.build_query_embedding(
+                [self._histories[internal] for _, internal in chunk],
+                [internal for _, internal in chunk],
+            )
+            excluded = (
+                [self._seen.get(internal, set()) for _, internal in chunk] if filter_seen else None
+            )
+            items, scores = self._search(queries, k, excluded)
+            for (user, _), row, row_scores in zip(chunk, items, scores, strict=True):
+                results[user] = [
+                    ScoredCandidate(
+                        item_id=self._internal_to_external[int(item)],
+                        rank=position,
+                        score=float(value),
+                        source=self.name,
+                    )
+                    for position, (item, value) in enumerate(
+                        zip(row, row_scores, strict=True), start=1
+                    )
+                    if item != EMPTY_SLOT
                 ]
         return results
 

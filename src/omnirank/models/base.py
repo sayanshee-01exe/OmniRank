@@ -71,6 +71,32 @@ class Candidate:
 
 
 @dataclass(frozen=True, slots=True)
+class ScoredCandidate:
+    """One retrieved item with the score *and* rank its source actually gave it.
+
+    Both are carried because they answer different questions and a ranker wants
+    both. The rank says where a source placed an item relative to its own other
+    candidates; the score says how strongly, on that source's own scale.
+
+    Critically, ``score`` is the model's genuine output -- never a value
+    reconstructed from ``rank``. A reciprocal of the rank looks like a score,
+    lands in a column named score, and silently replaces the signal a ranker was
+    supposed to learn from with a monotone function of information it already
+    has. Sources that cannot produce a score record ``None`` rather than a
+    stand-in.
+    """
+
+    item_id: str
+    rank: int
+    score: float | None
+    source: str
+
+    def __post_init__(self) -> None:
+        if self.rank < 1:
+            raise ValueError(f"rank is 1-based; got {self.rank}")
+
+
+@dataclass(frozen=True, slots=True)
 class RankedItem:
     """A candidate after ranking, carrying its final position."""
 
@@ -184,6 +210,34 @@ class CandidateGenerator(ABC):
     def __repr__(self) -> str:
         return f"{type(self).__name__}(name={self.name!r}, fitted={self._fitted})"
 
+    def recommend_batch_scored(
+        self, user_ids: list[str], k: int, *, filter_seen: bool = True
+    ) -> dict[str, list[ScoredCandidate]]:
+        """Top-``k`` candidates for many users, keeping each source's real score.
+
+        The default implementation loops :meth:`recommend`, which already
+        carries genuine scores. Generators that score a whole user batch against
+        the catalogue in one pass should override this -- most of them compute
+        exactly these numbers and then discard them.
+
+        Returning ``score=None`` is legitimate for a generator that genuinely
+        has no meaningful score. Returning a value derived from the rank is not:
+        it would occupy the score column with a restatement of the rank.
+        """
+        results: dict[str, list[ScoredCandidate]] = {}
+        for user_id in user_ids:
+            context = None if filter_seen else {"filter_seen": False}
+            results[user_id] = [
+                ScoredCandidate(
+                    item_id=candidate.item_id,
+                    rank=position,
+                    score=float(candidate.score),
+                    source=self.name,
+                )
+                for position, candidate in enumerate(self.recommend(user_id, k, context), start=1)
+            ]
+        return results
+
 
 class Ranker(ABC):
     """Orders a candidate list using richer features than retrieval can afford.
@@ -249,4 +303,10 @@ class Ranker(ABC):
         return f"{type(self).__name__}(name={self.name!r}, fitted={self._fitted})"
 
 
-__all__ = ["Candidate", "CandidateGenerator", "RankedItem", "Ranker"]
+__all__ = [
+    "Candidate",
+    "CandidateGenerator",
+    "RankedItem",
+    "Ranker",
+    "ScoredCandidate",
+]

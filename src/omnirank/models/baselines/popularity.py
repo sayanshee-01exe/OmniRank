@@ -38,7 +38,7 @@ from omnirank.core.exceptions import (
     DataError,
 )
 from omnirank.core.logging import get_logger
-from omnirank.models.base import Candidate, CandidateGenerator
+from omnirank.models.base import Candidate, CandidateGenerator, ScoredCandidate
 
 logger = get_logger(__name__)
 
@@ -226,6 +226,45 @@ class PopularityRecommender(CandidateGenerator):
                 if internal_item in seen:
                     continue
                 picked.append(self._internal_to_external[internal_item])
+                if len(picked) == k:
+                    break
+            results[user_id] = picked
+        return results
+
+    def recommend_batch_scored(
+        self, user_ids: list[str], k: int, *, filter_seen: bool = True
+    ) -> dict[str, list[ScoredCandidate]]:
+        """Batch retrieval keeping the decayed-popularity score for each item.
+
+        The score is the same quantity that produced the global ordering, so it
+        is genuinely the model's own output rather than a restatement of the
+        rank. It is constant across users -- popularity is not personalised --
+        which is itself a signal a ranker can use.
+        """
+        self.ensure_fitted()
+        if k < 1:
+            raise DataError("k must be >= 1", k=k)
+        ranked = self._ranked_items.tolist()
+        results: dict[str, list[ScoredCandidate]] = {}
+        for user_id in user_ids:
+            internal_user = self._external_to_internal_user.get(user_id)
+            seen = (
+                self._seen_by_user.get(internal_user, set())
+                if (filter_seen and internal_user is not None)
+                else set()
+            )
+            picked: list[ScoredCandidate] = []
+            for internal_item in ranked:
+                if internal_item in seen:
+                    continue
+                picked.append(
+                    ScoredCandidate(
+                        item_id=self._internal_to_external[internal_item],
+                        rank=len(picked) + 1,
+                        score=float(self._score_by_internal[internal_item]),
+                        source=self.name,
+                    )
+                )
                 if len(picked) == k:
                     break
             results[user_id] = picked

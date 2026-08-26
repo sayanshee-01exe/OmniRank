@@ -40,7 +40,7 @@ from omnirank.core.exceptions import (
     DataError,
 )
 from omnirank.core.logging import get_logger
-from omnirank.models.base import Candidate, CandidateGenerator
+from omnirank.models.base import Candidate, CandidateGenerator, ScoredCandidate
 from omnirank.models.baselines.bpr import resolve_torch_device
 from omnirank.models.baselines.negative_sampling import (
     UniformNegativeSampler,
@@ -507,6 +507,45 @@ class LightGCN(CandidateGenerator):
             for (user_id, _), row in zip(chunk, items, strict=True):
                 results[user_id] = [
                     self._internal_to_external[int(item)] for item in row if item >= 0
+                ]
+        return results
+
+    def recommend_batch_scored(
+        self, user_ids: list[str], k: int, *, filter_seen: bool = True
+    ) -> dict[str, list[ScoredCandidate]]:
+        """Batch retrieval that keeps the scores instead of discarding them.
+
+        :meth:`recommend_batch` computes exactly these values and then drops
+        them with ``items, _ = ...``. A ranking snapshot needs the score as well
+        as the position, so this variant returns both rather than leaving a
+        caller to reconstruct a stand-in from the rank.
+        """
+        self.ensure_fitted()
+        results: dict[str, list[ScoredCandidate]] = {}
+        known: list[tuple[str, int]] = []
+        for user_id in user_ids:
+            internal = self._external_to_internal_user.get(user_id)
+            if internal is None:
+                results[user_id] = []
+            else:
+                known.append((user_id, internal))
+        batch = self.config.evaluation_user_batch_size
+        for start in range(0, len(known), batch):
+            chunk = known[start : start + batch]
+            internal_ids = np.array([internal for _, internal in chunk], dtype="int64")
+            items, scores = self._top_k(internal_ids, k, filter_seen=filter_seen)
+            for (user_id, _), row, row_scores in zip(chunk, items, scores, strict=True):
+                results[user_id] = [
+                    ScoredCandidate(
+                        item_id=self._internal_to_external[int(item)],
+                        rank=position,
+                        score=float(value),
+                        source=self.name,
+                    )
+                    for position, (item, value) in enumerate(
+                        zip(row, row_scores, strict=True), start=1
+                    )
+                    if item >= 0
                 ]
         return results
 
