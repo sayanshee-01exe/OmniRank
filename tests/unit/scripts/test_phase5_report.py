@@ -267,3 +267,66 @@ class TestGeneratedReport:
         # Any claim of a gain must appear alongside its interval language.
         assert "interval" in text
         assert "significant" in text
+
+
+class TestColdPositivityFollowsTheTable:
+    """The cold-recall commentary must agree with the table above it.
+
+    The hand-written version outlived the model it described: after a refit
+    made cold Recall positive at every cutoff, the prose still claimed it was
+    zero at K=5 and K=10 — contradicting the table printed three lines above.
+    """
+
+    def test_all_positive_says_every_cutoff(self) -> None:
+        cold = {
+            "recall@5": 0.008811,
+            "recall@10": 0.012775,
+            "recall@20": 0.018062,
+            "recall@50": 0.029515,
+        }
+        prose = REPORT._cold_positivity(cold)
+        assert "positive at every measured cutoff" in prose
+        assert "zero at" not in prose
+
+    def test_a_genuine_zero_is_reported_as_zero(self) -> None:
+        cold = {"recall@5": 0.0, "recall@10": 0.0, "recall@20": 0.0004, "recall@50": 0.0013}
+        prose = REPORT._cold_positivity(cold)
+        assert "zero at K = 5, 10" in prose
+        assert "positive at K = 20, 50" in prose
+
+    def test_all_zero_fails_the_requirement_explicitly(self) -> None:
+        """Phase 5's completion requirement is cold Recall@K > 0 somewhere."""
+        prose = REPORT._cold_positivity({"recall@5": 0.0, "recall@20": 0.0})
+        assert "zero at every measured cutoff" in prose
+        assert "has not" in prose
+
+    def test_an_unmeasured_cold_view_says_so(self) -> None:
+        assert "not recorded" in REPORT._cold_positivity({})
+
+
+class TestAccuracyLimitationFollowsTheRanking:
+    """Limitation 1 must not contradict sections 29, 33 and 50."""
+
+    final: ClassVar[dict[str, Any]] = {"strict": {"ndcg@20": 0.008873}}
+    leading: ClassVar[list[dict[str, str]]] = [
+        {"system": "two_tower", "kind": "single", "ndcg@20": "0.008873"},
+        {"system": "lightgcn", "kind": "single", "ndcg@20": "0.006108"},
+    ]
+    trailing: ClassVar[list[dict[str, str]]] = [
+        {"system": "two_tower", "kind": "single", "ndcg@20": "0.000408"},
+        {"system": "lightgcn", "kind": "single", "ndcg@20": "0.006108"},
+    ]
+
+    def test_a_leading_model_is_not_called_below_the_baseline(self) -> None:
+        prose = REPORT._accuracy_limitation(self.final, self.leading)
+        assert "below" not in prose
+        assert "highest of the five sources" in prose
+
+    def test_a_leading_model_still_states_the_absolute_caveat(self) -> None:
+        """Leading internally is not the same as being any good."""
+        prose = REPORT._accuracy_limitation(self.final, self.leading)
+        assert "absolute" in prose.lower()
+
+    def test_a_trailing_model_is_reported_as_trailing(self) -> None:
+        prose = REPORT._accuracy_limitation({"strict": {"ndcg@20": 0.000408}}, self.trailing)
+        assert "below the best collaborative source" in prose

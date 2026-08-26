@@ -612,6 +612,14 @@ at 69,347 vectors; it would become one at scale.
 
 ## What Phase 5 inherits
 
+> **Phase 5 is complete.** See
+> [phase_05_report.md](phase_05_report.md) for what was built on top of this,
+> and [phase_05_closure.md](phase_05_closure.md) for the consistency pass that
+> closed it. The headline from there, for a reader arriving here first: the
+> multimodal two-tower became the strongest single source on this corpus and
+> the only one able to retrieve items with no training interactions.
+
+
 **A retriever that works on both splits, and a control that proves why.**
 LightGCN at 3 layers beats popularity on test — the first model here to do so —
 and the `num_layers=0` ablation establishes that the graph produced the gain,

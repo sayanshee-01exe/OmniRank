@@ -1,7 +1,7 @@
 # Phase 5 report — multimodal two-tower retrieval and cold-start
 
 Generated from `reports/metrics/phase_05/` at commit
-`42ad33ecb4146c3debe846633ea13984b90e4f71`. Every number below is read from a metric
+`6b92287ce143e8c8602ed6bbb450b31ddff9f6fd`. Every number below is read from a metric
 file at generation time; none is transcribed.
 
 ## Headline
@@ -502,10 +502,9 @@ index.
 | cold targets in catalogue | 227 |
 | cold targets retrieved at 50 | 0.029515 of eligible |
 
-**Cold Recall@K is positive**, which is the phase's completion requirement. It
-is positive at K=20 and K=50 and zero at K=5 and K=10 — cold items are being
-retrieved, but deep in the list rather than at the top. Reported as measured;
-the cold-item definition was not adjusted to improve it.
+**Cold Recall@K is positive**, which is the phase's completion requirement. It is positive at every measured cutoff (K = 5, 10, 20, 50). Recall@5 of 0.008811 means cold items reach even the shallowest cutoff measured.
+
+Reported as measured; the cold-item definition was not adjusted to improve it.
 
 Per-slice detail:
 
@@ -969,10 +968,7 @@ All critical checks passed.
 
 ## 48. Known limitations
 
-1. **Standalone accuracy is low.** Test NDCG@20 of
-   0.00887 is significantly below
-   LightGCN's. The two-tower earns its place through cold reachability and
-   coverage, not standalone ranking quality.
+1. **Absolute accuracy is low, even where it leads.** Test NDCG@20 of 0.00887 is the highest of the five sources — above `lightgcn` at 0.00611 — but roughly nine users in a thousand get a hit in their top 20. Every comparison in this report is internal to this repository and this corpus; none of it says the system is good in any absolute sense.
 2. **Its cold-start advantage rests on one corpus.** It beat LightGCN on cold items — cold Recall@20 of 0.018062 against LightGCN's 0.001322 — a factor of 13.7. The paired interval over the 2270 cold-target users is [+0.011454, +0.022467], which excludes zero: a real advantage. PixelRec50K has complete modality coverage, so every cold item is content-representable; a corpus with real gaps would not be so kind.
 3. **Selection ran on a 5,000-user subset.** The final model is fitted on the
    full train+validation split, but the selection that chose it was not.

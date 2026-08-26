@@ -806,6 +806,48 @@ def _standalone_narrative(fusion: list[dict[str, str]], bootstrap: list[dict[str
     )
 
 
+def _cold_positivity(cold: dict[str, Any]) -> str:
+    """State at which cutoffs cold Recall is positive, reading the numbers.
+
+    Written from the table because the hand-written version outlived the model
+    it described: it claimed cold Recall was zero at K=5 and K=10 after a refit
+    had made both positive, contradicting the table printed directly above it.
+    """
+    cuts = (5, 10, 20, 50, 100)
+    measured = {cut: cold.get(f"recall@{cut}") for cut in cuts if f"recall@{cut}" in cold}
+    if not measured:
+        return "_Cold Recall@K was not recorded in this run._"
+
+    positive = [cut for cut, value in measured.items() if float(value) > 0]
+    zero = [cut for cut, value in measured.items() if float(value) == 0]
+    if not positive:
+        return (
+            "**Cold Recall@K is zero at every measured cutoff.** Phase 5 has not "
+            "met its completion requirement."
+        )
+
+    detail = (
+        f"positive at every measured cutoff (K = {', '.join(str(c) for c in positive)})"
+        if not zero
+        else (
+            f"positive at K = {', '.join(str(c) for c in positive)} and zero at "
+            f"K = {', '.join(str(c) for c in zero)}"
+        )
+    )
+    shape = (
+        ""
+        if not zero
+        else " — cold items are retrieved, but deep in the list rather than at the top."
+    )
+    smallest = min(positive)
+    return (
+        f"**Cold Recall@K is positive**, which is the phase's completion "
+        f"requirement. It is {detail}{shape or '.'} Recall@{smallest} of "
+        f"{number(measured[smallest], 6)} means cold items reach even the "
+        f"shallowest cutoff measured."
+    )
+
+
 def sections_results(
     final: dict[str, Any],
     cold_rows: list[dict[str, str]],
@@ -869,6 +911,7 @@ def sections_results(
         ],
     )
 
+    cold_positivity = _cold_positivity(cold)
     cold_slice_table = table(
         cold_rows,
         [
@@ -987,10 +1030,9 @@ index.
 | cold targets in catalogue | {final.get("catalogue", {}).get("cold", "n/a")} |
 | cold targets retrieved at 50 | {number(cold.get("recall@50"), 6)} of eligible |
 
-**Cold Recall@K is positive**, which is the phase's completion requirement. It
-is positive at K=20 and K=50 and zero at K=5 and K=10 — cold items are being
-retrieved, but deep in the list rather than at the top. Reported as measured;
-the cold-item definition was not adjusted to improve it.
+{cold_positivity}
+
+Reported as measured; the cold-item definition was not adjusted to improve it.
 
 Per-slice detail:
 
@@ -1171,6 +1213,7 @@ def sections_closure(
     frameworks = metadata.get("framework_version", {})
 
     met, bar_sentence = cold_bar_verdict(fusion, bootstrap)
+    accuracy_limitation = _accuracy_limitation(final, fusion)
     bar_limitation = (
         "**Its cold-start advantage rests on one corpus.** It beat LightGCN on "
         f"cold items — {bar_sentence} PixelRec50K has complete modality "
@@ -1430,10 +1473,7 @@ checks passed**, {gate.get("critical_failures", "n/a")} critical failures,
     out += section(
         48,
         "Known limitations",
-        f"""1. **Standalone accuracy is low.** Test NDCG@20 of
-   {number(final.get("strict", {}).get("ndcg@20"))} is significantly below
-   LightGCN's. The two-tower earns its place through cold reachability and
-   coverage, not standalone ranking quality.
+        f"""1. {accuracy_limitation}
 2. {bar_limitation}
 3. **Selection ran on a 5,000-user subset.** The final model is fitted on the
    full train+validation split, but the selection that chose it was not.
@@ -1537,6 +1577,37 @@ absolute accuracy — that is a modelling project, not a pipeline stage.
 """,
     )
     return out
+
+
+def _accuracy_limitation(final: dict[str, Any], fusion: list[dict[str, str]]) -> str:
+    """The accuracy caveat, phrased to match where the model actually sits.
+
+    Derived because the hand-written version survived a refit that reversed it:
+    it asserted the two-tower was "significantly below LightGCN" while sections
+    29, 33 and 50 of the same report showed it significantly above.
+    """
+    ours = float(final.get("strict", {}).get("ndcg@20") or 0)
+    singles = {
+        row.get("system"): float(row.get("ndcg@20") or 0)
+        for row in fusion
+        if row.get("kind") == "single" and row.get("system") != "two_tower"
+    }
+    best = max(singles, key=lambda name: singles[name]) if singles else None
+
+    if best is None or ours <= singles[best]:
+        return (
+            f"**Standalone accuracy is low.** Test NDCG@20 of {ours:.5f} is at or "
+            "below the best collaborative source. The two-tower earns its place "
+            "through cold reachability and coverage, not standalone ranking."
+        )
+    return (
+        f"**Absolute accuracy is low, even where it leads.** Test NDCG@20 of "
+        f"{ours:.5f} is the highest of the five sources — above `{best}` at "
+        f"{singles[best]:.5f} — but roughly nine users in a thousand get a hit "
+        "in their top 20. Every comparison in this report is internal to this "
+        "repository and this corpus; none of it says the system is good in any "
+        "absolute sense."
+    )
 
 
 def _conclusion_result(fusion: list[dict[str, str]], bootstrap: list[dict[str, str]]) -> str:

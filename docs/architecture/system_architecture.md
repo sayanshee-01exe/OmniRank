@@ -75,27 +75,41 @@ nothing from any other subpackage, and `data` imports nothing from `models`,
 User and item data
         │
         ▼
-Candidate generation  ── each implements CandidateGenerator
-├── Popularity fallback              Phase 3
-├── Matrix factorization baseline    Phase 3
-├── LightGCN collaborative retrieval Phase 4
-├── SASRec sequential retrieval      Phase 4
-└── Multimodal two-tower retrieval   Phase 5
+Candidate generation  ── five sources, each a fitted CandidateGenerator
+├── Time-decayed popularity          ✅ Phase 3
+├── BPR matrix factorization         ✅ Phase 3
+├── LightGCN collaborative retrieval ✅ Phase 4
+├── SASRec sequential retrieval      ✅ Phase 4
+└── Multimodal two-tower retrieval   ✅ Phase 5  ── the only cold-capable source
         │
         ▼
-Candidate aggregation and deduplication    Phase 4 — CandidateAggregator
+Candidate aggregation and deduplication    ✅ Phase 4 — CandidateAggregator
         │
         ▼
-Ranking-feature generation                 Phase 6 — FeatureBuilder
+Reciprocal rank fusion                     ✅ Phase 4 — rank-based, never score-based
         │
         ▼
-LightGBM ranker                            Phase 6 — Ranker
+Offline recommendation output              ✅ CURRENT END OF THE PIPELINE
+                                              evaluated strict / warm / cold
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+        │                                     everything below is Phase 6
+        ▼
+Ranking-feature generation                 📋 Phase 6 — FeatureBuilder (contract only)
         │
         ▼
-MMR diversity-aware reranking              Phase 6 — Reranker
+LightGBM LambdaRank                        📋 Phase 6 — Ranker (contract only)
         │
         ▼
-Final Top-K recommendations
+Post-ranking correctness filters           📋 Phase 6 — PostRankingFilter (contract only)
+        │
+        ▼
+MMR diversity-aware reranking              📋 Phase 6 — Reranker (contract only)
+        │
+        ▼
+Online serving orchestration               📋 Phase 6 — endpoints return 501 today
+        │
+        ▼
+Final Top-K recommendations                📋 Phase 6
 ```
 
 Every box is an interface that exists today. None has an implementation.

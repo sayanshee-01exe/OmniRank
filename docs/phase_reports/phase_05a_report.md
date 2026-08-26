@@ -1,5 +1,14 @@
 # Phase 5a report — two-tower model core
 
+> **SUPERSEDED for results — historical record of a milestone.** This documents
+> the first Phase 5 milestone (a trainable, persistable model core) as it stood
+> on 2026-08-25. Its metrics predate the final model and must not be quoted:
+> the authoritative numbers are in
+> [phase_05_report.md](phase_05_report.md), generated from
+> `reports/metrics/phase_05/`. Kept because it records how the core was built
+> and verified before any retrieval existed.
+
+
 **Date:** 2026-08-25 · **Scope:** the first missing Phase 5 milestone — a
 trainable, testable, persistable multimodal two-tower model ·
 **Status:** complete · **Phase 5 overall:** still incomplete (see below)

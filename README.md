@@ -478,6 +478,21 @@ make phase5-report
 make validate-phase5
 ```
 
+CI runs the gate exactly as follows — the pipeline is load-bearing, not
+decoration:
+
+```yaml
+- name: Phase 5 completion gate (CI-safe)
+  run: |
+    set -o pipefail
+    python scripts/validate_phase5.py --ci | tee phase5-validation.log
+```
+
+Without `set -o pipefail` the step reports **tee's** exit status, so a failing
+validator would produce a passing job. The gate inspects its own invocation in
+the workflow file and fails if a pipe is not guarded, because that failure is
+invisible from inside CI — everything looks green.
+
 Two validator modes, and the difference is deliberate:
 
 | Command | Verifies | Does **not** verify |
