@@ -108,7 +108,7 @@ each boundary. Phase 2's splitter will be tested against it.
 |---|---|
 | **Components** | 6 — Feature generation · 7 — Sequence generation |
 | **Contracts** | `omnirank.features.FeatureStore` · `SequenceBuilder` |
-| **Status** | 📋 Contracts only (Phase 2) |
+| **Status** | ✅ Sequences (Phase 2) · ✅ Multimodal feature store (Phase 5) |
 
 **The rule that matters: a feature may only use information that existed at the
 timestamp it is attached to.** Computing "user's lifetime purchase count" over
@@ -121,13 +121,34 @@ Sequence builders receive **training-window interactions only**. Passing the ful
 log is precisely the leak the contract exists to prevent, and it is documented on
 the method.
 
+### Multimodal features (Phase 5)
+
+`MultimodalFeatureStore` aligns PixelRec's published per-item text and image
+vectors to the catalogue's internal ids and serves them as memory-mapped
+float32. Alignment is a Phase 2-style step — it runs once, writes a manifest,
+and is verified by checksum thereafter.
+
+Two properties matter downstream:
+
+- **Identity is enforced, not trusted.** The manifest records the
+  `item_mapping_checksum` the rows were aligned to. A model built against a
+  different mapping resolves every row to the wrong item and still returns a
+  plausible list, so `require_compatible` refuses the mismatch at load time.
+- **The vectors are not point-in-time features.** They describe an item's
+  content, which does not change with time, so the `as_of` rule above does not
+  bite. The same table's engagement counters *are* time-dependent and are
+  excluded by column selection rather than by discipline.
+
+See [multimodal_feature_alignment.md](../data/multimodal_feature_alignment.md)
+and [pixelrec_published_vectors.md](../features/pixelrec_published_vectors.md).
+
 ## 6. Model training
 
 | | |
 |---|---|
 | **Component** | 8 — Model training |
 | **Contract** | `omnirank.models.base.CandidateGenerator` · `Ranker` |
-| **Status** | ✅ Popularity + BPR (Phase 3); LightGCN + SASRec + aggregation + FAISS (Phase 4) |
+| **Status** | ✅ Popularity + BPR (P3); LightGCN + SASRec + aggregation + FAISS (P4); multimodal two-tower (P5) |
 
 Training is model-specific; the *contract* is not. Every generator implements
 `fit` / `recommend` / `score` / `save` / `load`, which is what lets the aggregator
@@ -136,6 +157,24 @@ treat five very different models as a list.
 Order of delivery is fixed by [ADR-007](../adr/ADR-007-baselines-before-advanced-models.md):
 popularity, then matrix factorization, then the neural models — each measured
 against its predecessor.
+
+### The two-tower's extra step (Phase 5)
+
+Four of the five sources are fitted and then queried directly. The two-tower has
+a stage between: after fitting, the **full catalogue** is encoded once into an
+embedding matrix, and an exact FAISS index is built over it.
+
+```text
+fit → encode catalogue (warm + cold) → write embeddings → build IndexFlatIP → verify
+```
+
+The verification step is not optional. An index built with the wrong metric or
+over a transposed matrix returns k plausible neighbours for every query and
+never raises, so it is compared against brute force before it is registered.
+
+The catalogue encoded at this step includes items with **no interactions** —
+that is the whole point, and the warm/cold counts are written to the manifest so
+"the index contains cold items" is a recorded fact rather than an assumption.
 
 ## 7. Offline evaluation
 

@@ -179,8 +179,16 @@ def _run_variant(
     fit_splits: tuple[str, ...],
     target: str,
     seed: int,
+    subset_users: int | None = -1,
 ) -> tuple[Any, dict[str, Any]]:
-    """Train one configuration and score it through the shared harness."""
+    """Train one configuration and score it through the shared harness.
+
+    ``subset_users`` defaults to the sentinel ``-1`` meaning "use the CLI
+    value". Pass ``None`` to fit on every user regardless of the flag, which is
+    what the final stage does: selection may subset for affordability, but a
+    model registered as final must be fitted on the whole population it will be
+    asked to serve.
+    """
     import yaml
 
     from omnirank.models.two_tower import TwoTowerConfig
@@ -190,6 +198,7 @@ def _run_variant(
     raw.update({k: v for k, v in overrides.items() if k != "label"})
     raw.update({"max_epochs": args.epochs, "seed": seed, "device": args.device})
     model_config = TwoTowerConfig(**raw)
+    users = args.subset_users if subset_users == -1 else subset_users
 
     started = time.perf_counter()
     (model, store, history), fit_measurement = fit_two_tower(
@@ -198,11 +207,11 @@ def _run_variant(
         model_config,
         processed_root=PROCESSED,
         device=args.device,
-        subset_users=args.subset_users,
+        subset_users=users,
     )
     train_seconds = time.perf_counter() - started
 
-    retriever = _build_retriever(model, store, dataset, fit_splits, args.subset_users, args.device)
+    retriever = _build_retriever(model, store, dataset, fit_splits, users, args.device)
     started = time.perf_counter()
     retriever.export_item_embeddings()
     export_seconds = time.perf_counter() - started
@@ -680,9 +689,20 @@ def _run_final(
             fit_splits=fit_splits,
             target=target,
             seed=config.seed,
+            # Every user, never the development subset. A "final" model fitted
+            # on 10% of the population can answer for 10% of the population,
+            # and returns an empty list for everyone else -- which depresses
+            # every metric it is measured on while looking like a modelling
+            # result rather than a missing flag.
+            subset_users=None,
         )
     except OmniRankError as exc:
         logger.error("phase5.final_failed", run_id=run_id, reason=str(exc))
+        return False
+
+    shortfall = population_shortfall(retriever, dataset.num_users)
+    if shortfall is not None:
+        logger.error("phase5.final_incomplete_population", run_id=run_id, **shortfall)
         return False
 
     catalogue = retriever.catalogue
@@ -761,6 +781,42 @@ def _run_final(
         index_matches_brute_force=exactness["matches_brute_force"],
     )
     return True
+
+
+#: Minimum share of the user population a final model must be able to answer
+#: for. Not 100%: a few users legitimately have no fittable history -- their
+#: entire log is the single interaction that became the held-out target, so
+#: there is nothing left to build a query from, and the fold builder excludes
+#: them for the same reason. A development subset removes an *order of
+#: magnitude*, so any threshold between the two separates the cases cleanly.
+MINIMUM_SERVABLE_SHARE = 0.95
+
+
+def population_shortfall(retriever: Any, expected_users: int) -> dict[str, Any] | None:
+    """Report whether a retriever can answer for far fewer users than it should.
+
+    Returns ``None`` when the population is essentially complete, otherwise the
+    numbers to log. A final model that serves 10% of users returns an empty
+    list for the other 90%, which depresses every metric it is measured on
+    while looking like a modelling result rather than a missing
+    ``--subset-users`` override.
+
+    This is not hypothetical: the first registered Phase 5 final model was
+    fitted with the development default and could answer for 5,000 of 50,000
+    users. Nothing in the artifact, the manifest or the metrics said so.
+    """
+    servable = sum(1 for history in retriever._histories.values() if history)
+    if servable >= expected_users * MINIMUM_SERVABLE_SHARE:
+        return None
+    return {
+        "servable_users": servable,
+        "expected_users": expected_users,
+        "share": round(servable / max(expected_users, 1), 4),
+        "detail": (
+            "The final model cannot answer for every user. Refit without "
+            "--subset-users before registering."
+        ),
+    }
 
 
 def _register_final_model(

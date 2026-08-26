@@ -12,11 +12,14 @@ VENV    := .venv
         train-popularity train-mf evaluate-popularity evaluate-mf compare-baselines \
         train-lightgcn train-sasrec evaluate-lightgcn evaluate-sasrec \
         build-lightgcn-index build-sasrec-index compare-retrievers \
-        compare-aggregation benchmark-index
+        compare-aggregation benchmark-index \
+        prepare-features compare-multimodal rolling-folds multi-seed two-tower-final \
+        compare-fusion phase5-configs phase5-artifacts phase5-report \
+        validate-phase5 validate-phase5-ci phase5
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
-	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
 
 $(VENV):
 	uv venv --python 3.11
@@ -170,8 +173,17 @@ phase5-artifacts:  ## Missing-modality, index benchmark, runtime and example evi
 phase5-report:  ## Assemble the Phase 5 report from the metric files
 	$(PYTHON) scripts/generate_phase5_report.py
 
-validate-phase5:  ## The Phase 5 completion gate (exit 0 means Phase 6 may begin)
+validate-phase5:  ## Full Phase 5 gate: artifacts, real metrics, README (exit 0 = done)
 	$(PYTHON) scripts/validate_phase5.py
+
+validate-phase5-ci:  ## CI-safe Phase 5 gate: code + fixtures only, real checks SKIP
+	$(PYTHON) scripts/validate_phase5.py --ci
+
+phase5:  ## Regenerate every derived Phase 5 output, then run the full gate
+	$(MAKE) phase5-configs
+	$(MAKE) phase5-artifacts
+	$(MAKE) phase5-report
+	$(MAKE) validate-phase5
 
 serve:  ## Run the API locally
 	$(PYTHON) scripts/serve.py

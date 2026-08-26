@@ -74,8 +74,38 @@ MODEL_KEYS = (
 )
 
 
+#: Characters that change a YAML scalar's meaning if left unquoted. A colon is
+#: the one that actually bit: a `selected_by` value describing a two-stage
+#: process contained ": ", which turns the rest of the line into a nested
+#: mapping and makes the whole file unparseable.
+_YAML_UNSAFE = (": ", " #", "\n")
+_YAML_UNSAFE_PREFIX = (
+    "#",
+    "- ",
+    "? ",
+    "! ",
+    "& ",
+    "* ",
+    "@",
+    "`",
+    "|",
+    ">",
+    "%",
+    "[",
+    "{",
+    ",",
+    '"',
+    "'",
+)
+
+
 def _scalar(value: Any) -> str:
-    """Render a YAML scalar without pulling in a serialiser."""
+    """Render a YAML scalar without pulling in a serialiser.
+
+    Quotes anything whose unquoted form would parse as something other than a
+    plain string. Emitting YAML by hand is fine; emitting *invalid* YAML by
+    hand is what this guards against.
+    """
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, list | tuple):
@@ -84,7 +114,24 @@ def _scalar(value: Any) -> str:
         return f"{value:g}"
     if value is None:
         return "null"
-    return str(value)
+    if isinstance(value, int):
+        return str(value)
+
+    text = str(value)
+    needs_quoting = (
+        not text
+        or text.strip() != text
+        or any(marker in text for marker in _YAML_UNSAFE)
+        or text.startswith(_YAML_UNSAFE_PREFIX)
+        or text.endswith(":")
+        # A bare word that YAML would read as a bool, null or number is a
+        # string here and must stay one.
+        or text.lower() in {"true", "false", "yes", "no", "on", "off", "null", "~"}
+    )
+    if not needs_quoting:
+        return text
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+    return f'"{escaped}"'
 
 
 def render_feature_config(manifest: dict[str, Any], dataset: dict[str, Any]) -> str:

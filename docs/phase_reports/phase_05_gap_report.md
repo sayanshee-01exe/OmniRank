@@ -1,5 +1,14 @@
 # Phase 5 gap report — the Phase 6 gate did not pass
 
+> **SUPERSEDED — historical record.** This document captures the gate's verdict
+> on 2026-08-25, when Phase 5 was incomplete and Phase 6 was correctly refused.
+> Every gap listed below has since been closed. The current state is in
+> [phase_05_report.md](phase_05_report.md), and the gate now exits 0.
+>
+> Kept rather than deleted because it records *why* Phase 6 was not started, and
+> a closed gate with no record of what it once refused is a weaker artifact than
+> one with the history attached.
+
 **Date:** 2026-08-25 · **Gate:** `scripts/validate_phase5.py` · **Exit code:** 1 ·
 **Result:** 3 / 15 checks passed, **11 critical failures**, 1 warning ·
 **Machine-readable:** `reports/metrics/phase_06/phase5_gate_report.json`

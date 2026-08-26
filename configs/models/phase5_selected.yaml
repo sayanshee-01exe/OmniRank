@@ -46,7 +46,7 @@ models:
 
 selection:
   ablation: mean_pooling
-  selected_by: two stage: ablation screen on the train->validation boundary, then confirmation across rolling folds; chosen on mean fold strict ndcg@20 with the worst fold as tie-breaker
+  selected_by: "two stage: ablation screen on the train->validation boundary, then confirmation across rolling folds; chosen on mean fold strict ndcg@20 with the worst fold as tie-breaker"
   fit_splits: [train]
   target_split: validation
   configuration_hash: e66e40ca5f0af9016061fdc62bb152e0dfd0f9197678b36ad355737a6c05e299

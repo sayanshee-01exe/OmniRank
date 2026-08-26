@@ -1,26 +1,26 @@
 {
   "artifact_path": "artifacts/models/pixelrec50k/two_tower/phase5-two-tower-final",
   "configuration_hash": "d128_TIGU_mean_t0.07",
-  "created_at": "2026-08-25T17:52:15.136197Z",
+  "created_at": "2026-08-26T09:00:37.888442Z",
   "feature_version": "1",
   "format_version": 1,
   "framework_version": {
     "torch": "2.13.0"
   },
-  "git_commit": "434801c7bc98fdc745f137197061103db1090f0f",
+  "git_commit": "42ad33ecb4146c3debe846633ea13984b90e4f71",
   "id_mapping_fingerprints": {
     "item": "235fcff3343a651150e8f220bfebc9bdb986e78ab47b80c3d025a8259048bc3c"
   },
   "metrics": {
-    "test_items_cold_start_ndcg@20": 0.000102,
-    "test_items_cold_start_recall@20": 0.000441,
-    "test_ndcg@20": 0.0004081285650458723,
-    "test_recall@20": 0.00104
+    "test_items_cold_start_ndcg@20": 0.007655,
+    "test_items_cold_start_recall@20": 0.018062,
+    "test_ndcg@20": 0.008872561908354233,
+    "test_recall@20": 0.02186
   },
   "model_name": "two_tower",
   "model_type": "retrieval_model",
   "model_version": "phase5-two-tower-final",
-  "notes": "stage=final | fit_splits=train+validation | target=test | protocol=full_catalogue | warm_items=43395 | cold_items=25952 | feature_manifest=dc80bc8c54d07ebe | trained_on_device=cpu",
+  "notes": "stage=final | fit_splits=train+validation | target=test | protocol=full_catalogue | warm_items=69120 | cold_items=227 | feature_manifest=dc80bc8c54d07ebe | trained_on_device=cpu",
   "python_version": "3.11.15",
   "random_seed": 42,
   "required_index_version": 1,

@@ -1,4 +1,4 @@
-# OmniRank
+ # OmniRank
 
 A production-oriented, multi-stage, multimodal recommendation system.
 
@@ -9,11 +9,16 @@ A production-oriented, multi-stage, multimodal recommendation system.
 > two-tower retriever that represents items from content and so can return
 > items with **no training interactions at all**.
 >
-> The blend's count of cold-target users it cannot serve at any depth goes from
-> 724 to **zero**. The two-tower's accuracy contribution is much smaller: a
-> statistically significant fusion gain on both Recall@20 and NDCG@20, but one
-> of at most 0.00034 in absolute terms. Standalone, it is significantly *below*
-> LightGCN.
+> On the official final test the two-tower is the **strongest single source**:
+> NDCG@20 0.00887 against LightGCN's 0.00611, Coverage@20 0.79 against 0.46,
+> and cold Recall@20 0.0181 against 0.0013 — a factor of 13.7, with a paired
+> interval excluding zero. Adding it to the blend moves NDCG@20 from 0.00948 to
+> 0.01288 and takes the count of cold-target users servable by nothing from 724
+> to **zero**.
+>
+> Absolute numbers stay small. An NDCG@20 in the hundredths is the best this
+> repository has produced on a hard corpus, not a good recommender by any
+> external standard.
 > See [`docs/phase_reports/phase_05_report.md`](docs/phase_reports/phase_05_report.md).
 >
 > **No ranker, reranker, or serving model exists.** Recommendation endpoints
@@ -128,7 +133,9 @@ Detailed diagrams: [`docs/architecture/system_architecture.md`](docs/architectur
 | **Multimodal two-tower retrieval** | ✅ Implemented | `src/omnirank/models/two_tower/` |
 | **Multimodal feature store** | ✅ Implemented | `src/omnirank/features/multimodal_store.py` |
 | **Cold-item retrieval and evaluation** | ✅ Implemented | `src/omnirank/models/two_tower/catalogue.py` |
-| Ranker and reranker | 📋 Interface only | `src/omnirank/models/base.py` |
+| **Exact FAISS over two-tower embeddings** | ✅ Implemented | `src/omnirank/retrieval/two_tower_index.py` |
+| **Rolling-fold selection and multi-seed verification** | ✅ Implemented | `src/omnirank/retrieval/fold_evaluation.py` |
+| Ranker and reranker | 📋 Interface only (Phase 6) | `src/omnirank/models/base.py` |
 | Database and cache clients | 📋 Protocol only | `src/omnirank/{database,cache}/` |
 | Prometheus / Grafana, Kubernetes, streaming | ❌ Deferred | — |
 
@@ -147,20 +154,19 @@ with the phase that delivers them and the baseline each must beat ([ADR-007](doc
 | LightGCN | graph collaborative | 4 | matrix factorization |
 | SASRec | sequential | 4 | matrix factorization |
 | Blended retriever (RRF and friends) | fusion | 4 | its own best single source |
-| Two-tower multimodal | content + collaborative | 5 | LightGCN on cold items — **not met, see below** |
+| Two-tower multimodal | content + collaborative | 5 | LightGCN on cold items — ✅ **met** (13.7x) |
 | LightGBM LambdaRank | learning-to-rank | 6 | best single retriever |
 | MMR | diversity reranking | 6 | ranker, on diversity at equal NDCG |
 
-> **The two-tower did not meet its stated bar.** It was required to beat
-> LightGCN on cold items. Its cold Recall@20 is 0.000441 against LightGCN's
-> 0.001322 — it did not.
+> **The two-tower met its stated bar.** It was required to beat LightGCN on
+> cold items: cold Recall@20 of 0.0181 against 0.0013, a factor of 13.7, with
+> a paired bootstrap interval over the 2,270 cold-target users that excludes
+> zero.
 >
-> What it does instead is *reach* cold items at all. LightGCN cannot return an
-> item it never saw during fitting, so 724 cold-target users are unservable by
-> it at any depth; the two-tower serves all of them. That is a different
-> property from ranking the reachable ones better, and it is recorded here as
-> what actually happened rather than as the bar being met. The full accounting,
-> with bootstrap intervals, is in
+> It also reaches cold items LightGCN cannot reach at all — a collaborative
+> source can never return an item it never saw while fitting, so 724
+> cold-target users are unservable by it at any depth, and the two-tower serves
+> every one. The full accounting, with intervals for every comparison, is in
 > [the Phase 5 report](docs/phase_reports/phase_05_report.md).
 
 ## Repository structure
@@ -241,6 +247,24 @@ open http://localhost:8000/docs     # full OpenAPI contract for every endpoint
 
 `/ready` returning **503 on a fresh checkout is correct**: no model has been
 trained, so the service cannot serve recommendations and says so.
+
+### Phase 5 CLIs
+
+Every Phase 5 command has a `make` target (`make help` lists them all) and a
+direct invocation. All support `--help`.
+
+| Command | What it does |
+|---|---|
+| `scripts/prepare_multimodal_features.py` | Align PixelRec's published vectors to the catalogue |
+| `scripts/compare_multimodal_retrievers.py` | Stages: `preflight`, `rolling-selection`, `lock`, `final`, `report` |
+| `scripts/run_rolling_folds.py` | `--stage folds` and `--stage multi-seed` over pre-test folds |
+| `scripts/compare_five_source_fusion.py` | Real five-source RRF and paired bootstrap, from registered artifacts |
+| `scripts/generate_phase5_configs.py` | Regenerate tracked configs; `--check` fails on hand edits |
+| `scripts/generate_phase5_artifacts.py` | Missing-modality, index benchmark, runtime, worked examples |
+| `scripts/generate_phase5_report.py` | Assemble the report from the metric files |
+| `scripts/validate_phase5.py` | The completion gate; `--ci` for the CI-safe mode |
+
+See [Reproducing Phase 5](#reproducing-phase-5) for the order they run in.
 
 Optional backing services (not required by Phase 1):
 
@@ -408,11 +432,66 @@ Tests require no GPU, no network, no database, and no downloaded model weights.
 | **2** | PixelRec50K data engineering: loaders, cleaning, filtering, ordered splitting, leakage validation, collaborative/graph/sequential datasets, feature alignment, slices, manifest | ✅ **Complete** |
 | **3** | Offline evaluation, popularity and matrix-factorization baselines | ✅ **Complete** |
 | **4** | LightGCN, SASRec, candidate aggregation, FAISS index | ✅ **Core complete**, with [documented limitations](docs/phase_reports/phase_04_report.md#limitations) |
-| **5** | Multimodal two-tower retrieval and new-item cold start | 🔨 **Current** |
-| **6** | Learning-to-rank, MMR and online serving | Planned |
-| **7** | Monitoring and online experimentation | Planned |
+| **5** | Multimodal two-tower retrieval and new-item cold start | ✅ **Complete**, with [documented limitations](docs/phase_reports/phase_05_report.md#48-known-limitations) |
+| **6** | Learning-to-rank, MMR and online serving | 📋 **Planned** — [recommended starting point](docs/phase_reports/phase_05_report.md#51-recommended-phase-6-scope) |
+| **7** | Monitoring and online experimentation | 📋 Planned |
 
-Phase reports: [Phase 1](docs/phase_reports/phase_01_report.md) · [Phase 2](docs/phase_reports/phase_02_report.md) · [Phase 3](docs/phase_reports/phase_03_report.md).
+Phase reports: [Phase 1](docs/phase_reports/phase_01_report.md) · [Phase 2](docs/phase_reports/phase_02_report.md) · [Phase 3](docs/phase_reports/phase_03_report.md) · [Phase 4](docs/phase_reports/phase_04_report.md) · [Phase 5](docs/phase_reports/phase_05_report.md).
+
+Phase completion is machine-checked rather than asserted:
+`python scripts/validate_phase5.py` exits 0 only when every critical check
+passes. See [Reproducing Phase 5](#reproducing-phase-5).
+
+## Reproducing Phase 5
+
+Every step below reads or writes tracked records. None of them invent numbers;
+each writes what it measured to `reports/metrics/phase_05/`.
+
+```bash
+# 1. Align PixelRec's published text and image vectors to the catalogue.
+make prepare-features
+
+# 2. Screen the ablation grid on the train->validation boundary,
+#    then confirm the finalists across genuine pre-test rolling folds.
+make compare-multimodal
+make rolling-folds
+make multi-seed
+
+# 3. Freeze the selection, then regenerate the tracked configs from it.
+python scripts/compare_multimodal_retrievers.py --stage lock
+make phase5-configs                      # writes phase5_selected.yaml + pixelrec_published.yaml
+python scripts/generate_phase5_configs.py --check   # exits 3 on hand edits
+
+# 4. Refit on train+validation, score test once, register model/embeddings/index.
+make two-tower-final
+
+# 5. Real five-source fusion and paired bootstrap, from registered artifacts.
+make compare-fusion
+
+# 6. Missing-modality, index benchmark, runtime and worked examples.
+make phase5-artifacts
+
+# 7. Assemble the report from the metric files.
+make phase5-report
+
+# 8. The gate. Exit 0 is the completion criterion.
+make validate-phase5
+```
+
+Two validator modes, and the difference is deliberate:
+
+| Command | Verifies | Does **not** verify |
+|---|---|---|
+| `python scripts/validate_phase5.py --ci` | source layout, imports, and the deterministic fixture suites | anything needing PixelRec, a trained artifact, or a GPU — every such check is reported **SKIP** |
+| `python scripts/validate_phase5.py` | all of the above **plus** registered artifacts, a real loaded recommendation, real cold recall, fusion and bootstrap evidence, and the README | — |
+
+A skip is never counted as a pass, and the JSON report stamps which mode
+produced it. A green CI badge is source-level correctness; it is not evidence
+that Phase 5 completed on real data.
+
+**Artifacts and metrics are git-ignored.** They are PixelRec-derived and the
+licence forbids redistribution. Only the manifests — checksums and aggregate
+metrics, no per-user or per-item rows — are tracked.
 
 ## Architectural decisions
 

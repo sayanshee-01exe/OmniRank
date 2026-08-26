@@ -49,8 +49,8 @@ VERSION = "phase5-two-tower-final"
 #: Retrieval depths the latency table reports.
 BENCHMARK_DEPTHS = (20, 50, 100, 200, 500)
 
-#: Query batch sizes, so the per-query cost of batching is visible.
-BENCHMARK_BATCHES = (1, 32, 256)
+#: Two float32 scorings of the same query may differ in accumulation order.
+SCORE_TOLERANCE = 1e-5
 
 #: Examples are few and hand-readable; the point is inspection, not coverage.
 EXAMPLE_USERS = 5
@@ -117,50 +117,197 @@ def missing_modality_view(retriever: Any) -> list[dict[str, Any]]:
     return rows
 
 
-def benchmark_index(retriever: Any, logger: Any) -> list[dict[str, Any]]:
-    """Measure retrieval latency at several depths and batch sizes."""
-    users = sorted(retriever._external_to_internal_user)
-    internal = [
-        retriever._external_to_internal_user[user]
-        for user in users
-        if retriever._histories.get(retriever._external_to_internal_user[user])
-    ][:512]
-    if not internal:
+def _user_cohorts(retriever: Any, dataset: Any, cold_items: set[int]) -> dict[str, list[int]]:
+    """Internal user ids grouped by the property each cohort is meant to probe.
+
+    A single "sample of users" hides the cases most likely to break: a user with
+    three interactions queries a nearly-empty history, and a user whose target
+    is cold exercises the content-only path that no collaborative source has.
+    Reported separately because an average over all of them would drown both.
+    """
+    histories = getattr(retriever, "_histories", {})
+    with_history = [user for user, items in sorted(histories.items()) if items]
+    if not with_history:
+        return {}
+
+    by_length = sorted(with_history, key=lambda user: len(histories[user]))
+    cohorts: dict[str, list[int]] = {
+        "sparse_users": [u for u in by_length if len(histories[u]) <= 5][:64],
+        "active_users": [u for u in reversed(by_length) if len(histories[u]) >= 20][:64],
+        "all_users_sample": with_history[:64],
+    }
+
+    # Warm- and cold-target cohorts, from the real held-out split.
+    external_user = {
+        internal: name for name, internal in dataset.external_to_internal_users().items()
+    }
+    warm_targets: list[int] = []
+    cold_targets: list[int] = []
+    with contextlib.suppress(Exception):
+        for row in dataset.split("test").itertuples():
+            user = int(row.internal_user_id)
+            if user not in histories or user not in external_user:
+                continue
+            bucket = cold_targets if int(row.internal_item_id) in cold_items else warm_targets
+            if len(bucket) < 64:
+                bucket.append(user)
+            if len(warm_targets) >= 64 and len(cold_targets) >= 64:
+                break
+    if warm_targets:
+        cohorts["warm_target_users"] = warm_targets
+    if cold_targets:
+        cohorts["cold_target_users"] = cold_targets
+    return {name: users for name, users in cohorts.items() if users}
+
+
+def _agreement(
+    retriever: Any, embeddings: np.ndarray, users: list[int], depth: int
+) -> dict[str, Any]:
+    """Index-versus-brute-force agreement for one cohort, and both latencies.
+
+    Set agreement and ordering agreement are reported separately: an index that
+    returns the right items in the wrong order is a different (and milder)
+    defect from one that returns the wrong items, and a single "matches" flag
+    cannot tell them apart.
+    """
+    from omnirank.retrieval.faiss_index import brute_force_top_k
+
+    histories = retriever._histories
+    queries = retriever.build_query_embedding([histories[user] for user in users], list(users))
+
+    started = time.perf_counter()
+    index_items, index_scores = retriever._search(queries, depth, None)
+    index_seconds = time.perf_counter() - started
+
+    started = time.perf_counter()
+    reference_items, reference_scores = brute_force_top_k(embeddings, queries, depth)
+    brute_seconds = time.perf_counter() - started
+
+    catalogue = retriever.catalogue.internal_ids
+    set_matches = 0
+    order_matches = 0
+    largest_gap = 0.0
+    for row in range(len(users)):
+        retrieved = [int(item) for item in index_items[row] if item != -1]
+        expected = [int(catalogue[position]) for position in reference_items[row]]
+        if set(retrieved) == set(expected):
+            set_matches += 1
+        if retrieved == expected:
+            order_matches += 1
+        gaps = np.abs(np.sort(index_scores[row])[::-1] - np.sort(reference_scores[row])[::-1])
+        largest_gap = max(largest_gap, float(gaps.max()) if gaps.size else 0.0)
+
+    rows = max(len(users), 1)
+    return {
+        "users": len(users),
+        "depth": depth,
+        "topk_set_agreement": round(set_matches / rows, 6),
+        "topk_order_agreement": round(order_matches / rows, 6),
+        "max_score_difference": f"{largest_gap:.3e}",
+        "within_score_tolerance": bool(largest_gap <= SCORE_TOLERANCE),
+        "index_median_ms_per_query": round(index_seconds * 1000.0 / rows, 4),
+        "brute_force_median_ms_per_query": round(brute_seconds * 1000.0 / rows, 4),
+        "speedup_over_brute_force": round(brute_seconds / max(index_seconds, 1e-9), 2),
+    }
+
+
+def _rebuild_and_verify_roundtrip(
+    retriever: Any, embeddings: np.ndarray, logger: Any
+) -> dict[str, Any]:
+    """Time an index build, then check a save/load round trip changes nothing.
+
+    An index that answers differently after being written and read back is
+    unusable in serving, where the only index anyone queries is a loaded one.
+    The failure is silent: both answers look plausible.
+    """
+    import tempfile
+
+    from omnirank.retrieval.two_tower_index import build_two_tower_index
+
+    identity = {
+        "model_version": VERSION,
+        "model_checksum": retriever.catalogue.checksum(),
+        "mapping_checksum": retriever.mapping_checksum,
+        "feature_version": retriever.store.feature_version,
+        "feature_manifest_checksum": retriever.store.manifest_checksum(),
+        "normalization": "l2" if retriever.config.l2_normalize else "none",
+    }
+    started = time.perf_counter()
+    index, _ = build_two_tower_index(embeddings, retriever.catalogue, **identity)
+    build_seconds = round(time.perf_counter() - started, 2)
+
+    histories = retriever._histories
+    probe = [user for user, items in sorted(histories.items()) if items][:32]
+    queries = retriever.build_query_embedding([histories[user] for user in probe], probe)
+    # `search` returns lists of lists; converted so the comparison below is
+    # elementwise rather than a list identity check that would pass trivially.
+    before_items, before_scores = (np.asarray(part) for part in index.search(queries, 20))
+
+    with tempfile.TemporaryDirectory() as directory:
+        index.save(Path(directory) / "index")
+        reloaded = type(index).load(Path(directory) / "index")
+        after_items, after_scores = (np.asarray(part) for part in reloaded.search(queries, 20))
+
+    identical = bool(np.array_equal(before_items, after_items))
+    difference = float(np.abs(before_scores - after_scores).max()) if before_scores.size else 0.0
+    logger.info(
+        "phase5.index_roundtrip",
+        build_seconds=build_seconds,
+        identical=identical,
+        max_score_difference=f"{difference:.3e}",
+    )
+    return {
+        "build_seconds": build_seconds,
+        "save_load_identical": identical,
+        "max_score_difference": f"{difference:.3e}",
+    }
+
+
+def benchmark_index(retriever: Any, dataset: Any, logger: Any) -> list[dict[str, Any]]:
+    """Exactness and latency, per user cohort and per depth.
+
+    The point is not the speed number. It is that the index and brute force
+    agree: an index built with the wrong metric or over a transposed matrix
+    still returns plausible neighbours for every query and never raises.
+    """
+    embeddings = retriever.item_embeddings_matrix
+    cold_items = set(retriever.cold_item_catalogue)
+    cohorts = _user_cohorts(retriever, dataset, cold_items)
+    if not cohorts:
         raise OmniRankError("No user with history; cannot benchmark retrieval")
 
-    rows = []
-    for batch in BENCHMARK_BATCHES:
-        chunk = internal[:batch]
-        queries = retriever.build_query_embedding(
-            [retriever._histories[user] for user in chunk], chunk
-        )
+    index_dir = Path("artifacts/indexes") / "pixelrec50k" / "two_tower" / VERSION
+    index_bytes = sum(f.stat().st_size for f in index_dir.rglob("*") if f.is_file())
+    build = _rebuild_and_verify_roundtrip(retriever, embeddings, logger)
+
+    rows: list[dict[str, Any]] = []
+    for cohort, users in cohorts.items():
+        cold_share = sum(1 for user in users if user in cold_items) if cold_items else 0
         for depth in BENCHMARK_DEPTHS:
-            # One warm-up, then three timed passes: the first call pays for
-            # lazy allocation that no later query repeats.
-            retriever._search(queries, depth, None)
-            samples = []
-            for _ in range(3):
-                started = time.perf_counter()
-                retriever._search(queries, depth, None)
-                samples.append((time.perf_counter() - started) * 1000.0)
-            total = float(np.median(samples))
+            measured = _agreement(retriever, embeddings, users, depth)
             rows.append(
                 {
-                    "batch_size": batch,
-                    "depth": depth,
-                    "median_batch_ms": round(total, 3),
-                    "median_per_query_ms": round(total / batch, 4),
+                    "cohort": cohort,
+                    **measured,
                     "catalogue_items": len(retriever.catalogue),
-                    "dimension": int(retriever.item_embeddings_matrix.shape[1]),
-                    "index_type": "exact_brute_force_torch",
+                    "cold_items_in_catalogue": len(cold_items),
+                    "cold_users_in_cohort": cold_share,
+                    "dimension": int(embeddings.shape[1]),
+                    "index_type": "IndexFlatIP",
+                    "index_bytes_on_disk": index_bytes,
+                    "index_build_seconds": build["build_seconds"],
+                    "save_load_identical": build["save_load_identical"],
+                    "save_load_max_score_difference": build["max_score_difference"],
                     "device": retriever.device,
                 }
             )
             logger.info(
                 "phase5.benchmark",
-                batch=batch,
+                cohort=cohort,
                 depth=depth,
-                per_query_ms=rows[-1]["median_per_query_ms"],
+                set_agreement=measured["topk_set_agreement"],
+                order_agreement=measured["topk_order_agreement"],
+                ms_per_query=measured["index_median_ms_per_query"],
             )
     return rows
 
@@ -277,7 +424,7 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             write_csv(missing_modality_view(retriever), PHASE_ROOT / "missing_modality_metrics.csv")
-            benchmark = benchmark_index(retriever, logger)
+            benchmark = benchmark_index(retriever, dataset, logger)
             write_csv(benchmark, PHASE_ROOT / "index_benchmark.csv")
             write_json(
                 recommendation_examples(retriever, dataset),
@@ -315,7 +462,11 @@ def _write_cost_tables(benchmark: list[dict[str, Any]], logger: Any, run_id: str
         }
         for record in records
     ]
-    single = [row for row in benchmark if row["batch_size"] == 1 and row["depth"] == 200]
+    single = [
+        row
+        for row in benchmark
+        if row.get("cohort") == "all_users_sample" and row.get("depth") == 200
+    ]
     runtime += [
         {
             "stage": "serving",
@@ -324,9 +475,9 @@ def _write_cost_tables(benchmark: list[dict[str, Any]], logger: Any, run_id: str
             "seed": None,
             "training_examples": None,
             "train_seconds": None,
-            "evaluation_seconds": round(single[0]["median_batch_ms"] / 1000.0, 6)
-            if single
-            else None,
+            "evaluation_seconds": (
+                round(single[0]["index_median_ms_per_query"] / 1000.0, 6) if single else None
+            ),
             "epochs_run": None,
             "device": single[0]["device"] if single else None,
         }

@@ -132,6 +132,126 @@ def _load_two_tower(config: Any, args: argparse.Namespace) -> Any:
     return retriever
 
 
+def _source_diagnostics(
+    models: dict[str, Any],
+    users: list[str],
+    targets: dict[str, set[str]],
+    cold_users: set[str],
+    depth: int,
+    logger: Any,
+    run_id: str,
+) -> list[dict[str, Any]]:
+    """Per-source accounting: what each source was asked for and delivered.
+
+    Aggregate fusion metrics cannot distinguish "this source contributed
+    nothing" from "this source silently returned nothing". An underfilled list
+    is a capacity problem, a failure is a bug, and a full list that hits no
+    target is a quality problem -- three different diagnoses that look
+    identical in a blended NDCG.
+    """
+    rows: list[dict[str, Any]] = []
+    for name, model in sorted(models.items()):
+        requested = len(users) * depth
+        returned = 0
+        underfilled = 0
+        failures = 0
+        found = 0
+        cold_found = 0
+        try:
+            per_user = model.recommend_batch(users, depth)
+        except Exception as exc:  # a source that cannot answer at all
+            logger.error("fusion.source_failed", run_id=run_id, source=name, reason=str(exc)[:200])
+            per_user = {}
+            failures = len(users)
+
+        for user in users:
+            items = per_user.get(user, [])
+            if not items:
+                failures += 1 if not per_user else 0
+            returned += len(items)
+            if len(items) < depth:
+                underfilled += 1
+            target = targets.get(user)
+            if target and set(items) & target:
+                found += 1
+                if user in cold_users:
+                    cold_found += 1
+
+        rows.append(
+            {
+                "source": name,
+                "users": len(users),
+                "candidates_requested": requested,
+                "candidates_returned": returned,
+                "fill_rate": round(returned / max(requested, 1), 6),
+                "underfilled_lists": underfilled,
+                "source_failures": failures,
+                "targets_found": found,
+                "target_hit_rate": round(found / max(len(targets), 1), 6),
+                "cold_targets_found": cold_found,
+                "cold_users": len(cold_users),
+                "depth": depth,
+            }
+        )
+        logger.info("fusion.source_diagnostics", run_id=run_id, **rows[-1])
+    return rows
+
+
+def _final_list_contribution(
+    per_source: dict[str, dict[str, list[str]]], blend_lists: dict[str, list[str]], cutoff: int = 20
+) -> list[dict[str, Any]]:
+    """Which source put each item into the blended top-``cutoff``.
+
+    An item can be nominated by several sources, so shares sum to more than
+    one. Reported as "appeared in the final list having been nominated by S"
+    rather than as an exclusive attribution, because RRF has no notion of a
+    single owning source.
+    """
+    counts: dict[str, int] = dict.fromkeys(per_source, 0)
+    total = 0
+    for user, items in blend_lists.items():
+        top = items[:cutoff]
+        total += len(top)
+        for source, lists in per_source.items():
+            nominated = set(lists.get(user, []))
+            counts[source] += sum(1 for item in top if item in nominated)
+    return [
+        {
+            "source": source,
+            "slots_in_final_top_20": count,
+            "final_slots_total": total,
+            "share_of_final_slots": round(count / max(total, 1), 6),
+        }
+        for source, count in sorted(counts.items())
+    ]
+
+
+def _cold_target_users(dataset: Any, target: str) -> set[str]:
+    """External ids of users whose held-out target is a cold item.
+
+    Read from the Phase 2 cold-start item slice rather than recomputed, so the
+    bootstrap's population is the same one the cold metrics are reported over.
+    An empty set means the slice is missing, and cold comparisons are then
+    reported as unmeasurable rather than as zero.
+    """
+    slice_path = Path(PROCESSED) / "evaluation_slices" / "items_cold_start.parquet"
+    if not slice_path.is_file():
+        return set()
+    import pandas as pd
+
+    cold_items = {int(value) for value in pd.read_parquet(slice_path)["entity_id"]}
+    external_user = {
+        internal: name for name, internal in dataset.external_to_internal_users().items()
+    }
+    users: set[str] = set()
+    for row in dataset.split(target).itertuples():
+        if int(row.internal_item_id) in cold_items:
+            name = external_user.get(int(row.internal_user_id))
+            if name is not None:
+                users.add(str(name))
+    return users
+
+
 def _score(
     system: str,
     model: Any,
@@ -142,6 +262,7 @@ def _score(
     kind: str,
     sources: str,
     per_user_out: dict[str, dict[str, dict[str, float]]] | None = None,
+    cold_target_users: set[str] | None = None,
 ) -> dict[str, Any]:
     """Evaluate one system through the shared harness.
 
@@ -164,7 +285,18 @@ def _score(
     )
     flat = result.strict.flat()
     if per_user_out is not None:
-        per_user_out[system] = dict(result.strict.per_user)
+        # Per-user cold recall is not carried by SliceResult, which keeps only
+        # aggregates. It is recovered here by restricting the strict per-user
+        # map to cold-target users -- the identical quantity, because the cold
+        # slice is defined as "strict metrics over the users whose target is a
+        # cold item". Recomputing it any other way would risk the interval
+        # describing a different evaluation from the point estimate beside it.
+        per_user = {user: dict(values) for user, values in result.strict.per_user.items()}
+        for user in cold_target_users or ():
+            entry = per_user.get(user)
+            if entry is not None and "recall@20" in entry:
+                entry["cold_recall@20"] = entry["recall@20"]
+        per_user_out[system] = per_user
     slices = {item.slice_name: item.to_dict() for item in result.slices}
     cold = slices.get("items_cold_start", {})
     return {
@@ -175,6 +307,10 @@ def _score(
         "recall@20": round(flat.get("recall@20", 0.0), 8),
         "coverage@20": round(flat.get("coverage@20", 0.0), 8),
         "novelty@20": round(flat.get("novelty@20", 0.0), 6),
+        # Exposure concentration: 0 is perfectly even, 1 is one item taking
+        # every impression. Reported beside coverage because a system can cover
+        # many items while still funnelling nearly all exposure to a few.
+        "exposure_gini@20": round(flat.get("gini@20", 0.0), 6),
         "cold_ndcg@20": round(cold.get("ndcg@20", 0.0), 8),
         "cold_recall@20": round(cold.get("recall@20", 0.0), 8),
         "cold_recall@50": round(cold.get("recall@50", 0.0), 8),
@@ -186,11 +322,29 @@ def _score(
 
 #: Comparisons the phase actually turns on. Each is (challenger, baseline).
 BOOTSTRAP_PAIRS = (
+    ("two_tower", "popularity"),
+    ("two_tower", "matrix_factorization"),
+    ("two_tower", "lightgcn"),
     ("five_source_rrf", "four_source_rrf"),
     ("five_source_rrf", "lightgcn"),
     ("lightgcn_two_tower", "lightgcn"),
-    ("two_tower", "lightgcn"),
 )
+
+#: Metrics each comparison is run on. Cold Recall@20 is included because it is
+#: the metric Phase 5 exists to move, and a fusion gain on warm accuracy says
+#: nothing about it.
+BOOTSTRAP_METRICS = ("ndcg@20", "recall@20", "cold_recall@20")
+
+#: Weights for the weighted-RRF variant, fixed in advance from the standalone
+#: ordering rather than tuned. Tuning weights against the test split would be
+#: the same leak as selecting a model on it.
+SOURCE_WEIGHTS: dict[str, float] = {
+    "lightgcn": 1.5,
+    "sasrec": 1.0,
+    "popularity": 1.0,
+    "matrix_factorization": 0.75,
+    "two_tower": 0.75,
+}
 
 #: Resamples. 1000 is the project default and is enough for a 95% interval
 #: whose width is reported to three decimals.
@@ -219,7 +373,7 @@ def _write_bootstrap(
                 reason="one system was not scored in this run",
             )
             continue
-        for metric in ("recall@20", "ndcg@20"):
+        for metric in BOOTSTRAP_METRICS:
             try:
                 interval = paired_bootstrap_delta(
                     per_user[challenger],
@@ -294,9 +448,22 @@ def main(argv: list[str] | None = None) -> int:
 
         rows: list[dict[str, Any]] = []
         per_user: dict[str, dict[str, dict[str, float]]] = {}
+        cold_users = _cold_target_users(dataset, target)
+        logger.info("fusion.cold_population", run_id=run_id, cold_target_users=len(cold_users))
         for name, model in models.items():
             rows.append(
-                _score(name, model, dataset, config, fit_splits, target, "single", name, per_user)
+                _score(
+                    name,
+                    model,
+                    dataset,
+                    config,
+                    fit_splits,
+                    target,
+                    "single",
+                    name,
+                    per_user,
+                    cold_users,
+                )
             )
             logger.info(
                 "fusion.solo",
@@ -305,16 +472,22 @@ def main(argv: list[str] | None = None) -> int:
             )
             write_csv(rows, PHASE_ROOT / "five_source_fusion_metrics.csv")
 
-        blends = {
-            "four_source_rrf": COLLABORATIVE,
-            "five_source_rrf": (*COLLABORATIVE, TWO_TOWER),
-            "lightgcn_two_tower": ("lightgcn", TWO_TOWER),
-            "sasrec_two_tower": ("sasrec", TWO_TOWER),
+        blends: dict[str, tuple[tuple[str, ...], dict[str, float] | None]] = {
+            "four_source_rrf": (COLLABORATIVE, None),
+            "five_source_rrf": ((*COLLABORATIVE, TWO_TOWER), None),
+            # Weighted variant. The weights are not tuned -- tuning them on the
+            # test split is exactly the leak the phase's discipline forbids.
+            # They encode the standalone ordering already measured on this same
+            # table, so this answers "does down-weighting the weaker sources
+            # help?" and nothing more.
+            "five_source_weighted_rrf": ((*COLLABORATIVE, TWO_TOWER), SOURCE_WEIGHTS),
+            "lightgcn_two_tower": (("lightgcn", TWO_TOWER), None),
+            "sasrec_two_tower": (("sasrec", TWO_TOWER), None),
         }
-        for label, members in blends.items():
+        for label, (members, weights) in blends.items():
             blend = BlendedRetriever(
                 {name: models[name] for name in members},
-                build_aggregator("reciprocal_rank_fusion"),
+                build_aggregator("reciprocal_rank_fusion", source_weights=weights),
                 name=label,
             )
             rows.append(
@@ -328,6 +501,7 @@ def main(argv: list[str] | None = None) -> int:
                     "blend",
                     "+".join(members),
                     per_user,
+                    cold_users,
                 )
             )
             logger.info(
@@ -387,6 +561,26 @@ def main(argv: list[str] | None = None) -> int:
                 measured = candidate_recall(pool, targets, depth=budget * len(members))
                 recall_rows.append({"budget": budget, "sources": label, **measured.to_dict()})
         write_csv(recall_rows, PHASE_ROOT / "candidate_recall.csv")
+
+        # Per-source accounting. Written after `targets` exists, because a
+        # source's target-hit count is only meaningful against real ground
+        # truth.
+        write_csv(
+            _source_diagnostics(models, users, targets, cold_users, depth, logger, run_id),
+            PHASE_ROOT / "source_diagnostics.csv",
+        )
+
+        # Which source's nominations survive into the blended top 20.
+        five_source = BlendedRetriever(
+            dict(models),
+            build_aggregator("reciprocal_rank_fusion"),
+            name="five_source_rrf",
+        )
+        blend_lists = five_source.recommend_batch(users, 20)
+        write_csv(
+            _final_list_contribution(per_source, blend_lists),
+            PHASE_ROOT / "final_list_contribution.csv",
+        )
 
         # Targets only the two-tower reached.
         others = {

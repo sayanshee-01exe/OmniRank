@@ -248,7 +248,23 @@ jobs:
         run: pytest tests/integration/test_two_tower_training.py \
                     tests/integration/test_phase5_retrieval.py -q
 
-      # Invoked directly, not through a pipe: `python ... | tee` reports tee's
-      # exit status, so a failing validator would look like a passing job.
-      - name: Phase 5 completion gate
-        run: python scripts/validate_phase5.py --ci
+      # `set -o pipefail` is load-bearing, not decoration: without it a pipeline
+      # reports tee's exit status, so a failing validator would look like a
+      # passing job. The gate checks its own invocation for exactly this,
+      # because the failure is invisible from inside CI -- everything is green.
+      #
+      # CI mode runs the deterministic fixture tests and records every
+      # real-data check as SKIP. A green badge here is source-level
+      # correctness, not evidence that Phase 5 completed on real data.
+      - name: Phase 5 completion gate (CI-safe)
+        run: |
+          set -o pipefail
+          python scripts/validate_phase5.py --ci | tee phase5-validation.log
+
+      - name: Upload Phase 5 validation log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase5-validation-log
+          path: phase5-validation.log
+          if-no-files-found: warn
