@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from omnirank.core.config import AppConfig
 from omnirank.core.exceptions import DataError
@@ -61,10 +62,24 @@ def boundary_for_stage(stage: str) -> tuple[tuple[str, ...], str]:
 
 
 def fit_popularity(
-    dataset: ProcessedDataset, fit_splits: tuple[str, ...], config: PopularityConfig
+    dataset: ProcessedDataset,
+    fit_splits: tuple[str, ...],
+    config: PopularityConfig,
+    *,
+    interactions: pd.DataFrame | None = None,
 ) -> tuple[PopularityRecommender, Any]:
-    """Fit a popularity model on the given splits."""
-    fit_interactions = dataset.fit_interactions(fit_splits)
+    """Fit a popularity model on the given splits.
+
+    ``interactions`` overrides the split-derived log, which is how a
+    point-in-time snapshot fits popularity on one rolling fold's pre-cutoff
+    history. Popularity is the most leak-prone source in the system precisely
+    because it is the cheapest: counting the whole log takes no longer than
+    counting a prefix of it, so the wrong version is never slow enough to
+    notice.
+    """
+    fit_interactions = (
+        dataset.fit_interactions(fit_splits) if interactions is None else interactions
+    )
     data = PopularityFitData(
         interactions=fit_interactions,
         internal_to_external_item=dataset.internal_to_external_items(),
@@ -85,15 +100,21 @@ def fit_bpr(
     config: Any,
     *,
     device: str = "auto",
+    interactions: pd.DataFrame | None = None,
 ) -> tuple[Any, Any]:
     """Fit a BPR model on the given splits.
+
+    ``interactions`` overrides the split-derived log, for point-in-time fits on
+    a rolling fold's pre-cutoff history.
 
     Imported lazily so this module - and everything that only needs popularity -
     stays importable without the ``baseline`` extra installed.
     """
     from omnirank.models.baselines.bpr import BPRFitData, BPRMatrixFactorization
 
-    fit_interactions = dataset.fit_interactions(fit_splits)
+    fit_interactions = (
+        dataset.fit_interactions(fit_splits) if interactions is None else interactions
+    )
     data = BPRFitData(
         interactions=fit_interactions,
         num_users=dataset.num_users,
