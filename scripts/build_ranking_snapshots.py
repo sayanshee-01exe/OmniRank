@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import json
 import sys
 import time
+import tracemalloc
 from pathlib import Path
 from typing import Any, Final
 
@@ -44,9 +46,11 @@ from omnirank.ranking.candidate_snapshot import (
     SnapshotStats,
     build_manifest,
     build_snapshot_rows,
+    guard_overwrite,
     snapshot_checksum,
     validate_snapshot,
     write_manifest,
+    write_snapshot_atomically,
 )
 
 CONFIG_ERROR_EXIT = 2
@@ -61,6 +65,13 @@ DEFAULT_BUDGET = 500
 #: Users scored per retrieval batch. Bounded so a 50,000-user fold does not
 #: materialise fifty thousand candidate lists at once.
 USER_BATCH = 2000
+
+#: Cap on the fused pool per query. Five sources at budget 500 is up to 2,500
+#: candidates before dedup; at 50,000 users that is ~100M rows, which no
+#: downstream stage can hold. Serving would truncate the fused list too, so
+#: this makes the offline pool the same shape as the online one rather than
+#: training the ranker on a depth it will never see.
+FUSED_POOL_LIMIT = 600
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -86,12 +97,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Cap the number of queries. For smoke runs only; never for a real snapshot.",
     )
     parser.add_argument("--skip-checksums", action="store_true")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace an existing snapshot for the same fold and split.",
+    )
+    parser.add_argument(
+        "--allow-source-failure",
+        action="store_true",
+        help=(
+            "DEVELOPMENT ONLY. Continue when a retriever fails, marking the "
+            "snapshot degraded. Degraded snapshots are refused by ranker "
+            "selection and by final evaluation."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def _fit_sources(
     dataset: Any,
     history: pd.DataFrame,
+    targets: pd.DataFrame,
     config: Any,
     args: argparse.Namespace,
     logger: Any,
@@ -109,21 +135,63 @@ def _fit_sources(
     from omnirank.models.baselines.runner import fit_bpr, fit_popularity
     from omnirank.retrieval.runner import fit_lightgcn, fit_sasrec, fit_two_tower
 
+    mapping = dataset.mapping_metadata.get("item_mapping_checksum", "")
     boundary = f"interactions strictly before rolling offset {args.offset}"
+    # The temporal claim, checked the way the fold is actually cut. Rolling
+    # folds cut at a per-user offset, not at a wall-clock instant: one user's
+    # third-from-last interaction is years away from another's. Comparing a
+    # global max-history against a global min-target therefore compares two
+    # unrelated users and always fails, which is what an earlier version of
+    # this guard did. The meaningful invariant is per user.
+    per_user_history = history.groupby("internal_user_id")["timestamp"].max()
+    per_user_target = targets.set_index("internal_user_id")["timestamp"]
+    aligned = per_user_history.to_frame("max_history").join(
+        per_user_target.rename("target"), how="inner"
+    )
+    violations = int((aligned["max_history"] >= aligned["target"]).sum())
+    if violations:
+        raise OmniRankError(
+            "Some users' fit history reaches their own prediction cutoff; "
+            "this is not point-in-time",
+            users_violating=violations,
+            users_checked=len(aligned),
+        )
+
+    max_fit_timestamp = int(history["timestamp"].max())
+    # Recorded as the earliest cutoff any query in this fold predicts. It is a
+    # summary for the manifest, not the boundary the check above enforces.
+    boundary_timestamp = int(per_user_target.min())
+    identity_common = {
+        "fit_fold": f"offset_{args.offset}",
+        "fit_boundary": boundary,
+        "fit_boundary_timestamp": boundary_timestamp,
+        "max_fit_timestamp": max_fit_timestamp,
+        "fit_interactions": len(history),
+        "fit_users": int(history["internal_user_id"].nunique()),
+        "fit_items": int(history["internal_item_id"].nunique()),
+        "dataset_version": str(dataset.identity.to_dict().get("dataset_version", "")),
+        "split_version": str(dataset.identity.to_dict().get("split_version", "")),
+        "mapping_checksum": mapping,
+        "candidate_budget": args.budget,
+        "device": args.device,
+    }
+
     models: dict[str, Any] = {}
     identities: list[RetrieverIdentity] = []
-    mapping = dataset.mapping_metadata.get("item_mapping_checksum", "")
 
-    def record(source: str, model: Any, configuration_hash: str) -> None:
+    def record(
+        source: str, model: Any, configuration_hash: str, seed: int | None, fit_seconds: float
+    ) -> None:
         models[source] = model
         identities.append(
             RetrieverIdentity(
                 source=source,
+                model_class=type(model).__name__,
                 model_version=f"pit-offset{args.offset}-{source}",
                 configuration_hash=configuration_hash,
-                mapping_checksum=mapping,
-                fit_boundary=boundary,
-                fit_interactions=len(history),
+                seed=seed,
+                fit_seconds=fit_seconds,
+                **identity_common,
             )
         )
         logger.info(
@@ -132,26 +200,49 @@ def _fit_sources(
             source=source,
             offset=args.offset,
             interactions=len(history),
+            seconds=round(fit_seconds, 1),
         )
 
     started = time.perf_counter()
+    step = time.perf_counter()
     popularity_config = _locked_config("popularity")
     model, _ = fit_popularity(dataset, ("train",), popularity_config, interactions=history)
-    record("popularity", model, f"halflife{popularity_config.half_life_days:g}")
+    record(
+        "popularity",
+        model,
+        f"halflife{popularity_config.half_life_days:g}",
+        getattr(popularity_config, "seed", None),
+        time.perf_counter() - step,
+    )
 
+    step = time.perf_counter()
     bpr_config = _locked_config("matrix_factorization")
     model, _ = fit_bpr(dataset, ("train",), bpr_config, device=args.device, interactions=history)
-    record("matrix_factorization", model, f"d{bpr_config.embedding_dim}")
+    record(
+        "matrix_factorization",
+        model,
+        f"d{bpr_config.embedding_dim}",
+        getattr(bpr_config, "seed", None),
+        time.perf_counter() - step,
+    )
 
+    step = time.perf_counter()
     lightgcn_config = _locked_config("lightgcn")
     model, _ = fit_lightgcn(dataset, ("train",), lightgcn_config, device=args.device, edges=history)
-    record("lightgcn", model, f"L{lightgcn_config.num_layers}")
+    record(
+        "lightgcn",
+        model,
+        f"L{lightgcn_config.num_layers}",
+        getattr(lightgcn_config, "seed", None),
+        time.perf_counter() - step,
+    )
 
     # Sequential and content models consume per-user example rows rather than
     # an edge list, built from this fold's history only.
     from omnirank.retrieval.runner import sequences_from_fold
 
     sequences = sequences_from_fold(_FoldView(history), maximum_history_length=50)
+    step = time.perf_counter()
     sasrec_config = _locked_config("sasrec")
     model, _ = fit_sasrec(
         dataset,
@@ -161,8 +252,15 @@ def _fit_sources(
         device=args.device,
         sequences=sequences,
     )
-    record("sasrec", model, f"d{getattr(sasrec_config, 'embedding_dim', '?')}")
+    record(
+        "sasrec",
+        model,
+        f"d{sasrec_config.embedding_dim}",
+        getattr(sasrec_config, "seed", None),
+        time.perf_counter() - step,
+    )
 
+    step = time.perf_counter()
     two_tower_config = _two_tower_config()
     (network, store, _), _ = fit_two_tower(
         dataset,
@@ -176,6 +274,8 @@ def _fit_sources(
         "two_tower",
         _wrap_two_tower(network, store, dataset, sequences, args.device),
         two_tower_config.label,
+        getattr(two_tower_config, "seed", None),
+        time.perf_counter() - step,
     )
 
     logger.info(
@@ -229,7 +329,6 @@ def _locked_config(source: str) -> Any:
     holds the validation metrics that justified the choice, and those are
     provenance rather than hyperparameters.
     """
-    import dataclasses
 
     record = json.loads(Path(LOCKED_SELECTION[source]).read_text())[source]
 
@@ -263,7 +362,6 @@ def _two_tower_config() -> Any:
     raw = yaml.safe_load(Path("configs/models/two_tower.yaml").read_text())["two_tower"]
     selected = yaml.safe_load(Path("configs/models/phase5_selected.yaml").read_text())
     block = selected["models"]["candidate_generators"]["two_tower"]
-    import dataclasses
 
     accepted = {field.name for field in dataclasses.fields(TwoTowerConfig)}
     raw.update({key: value for key, value in block.items() if key in accepted})
@@ -331,6 +429,20 @@ def main(argv: list[str] | None = None) -> int:
             logger.error("ranking.setup_failed", run_id=run_id, reason=str(exc))
             return RUN_ERROR_EXIT
 
+        destination = RANKING_ROOT / f"{args.split}_candidates.parquet"
+        manifest_path = RANKING_ROOT / f"{args.split}_snapshot_manifest.json"
+        try:
+            guard_overwrite(
+                destination,
+                manifest_path,
+                overwrite=args.overwrite,
+                fold_id=f"offset_{args.offset}",
+                split=args.split,
+            )
+        except OmniRankError as exc:
+            logger.error("ranking.overwrite_refused", run_id=run_id, reason=str(exc))
+            return RUN_ERROR_EXIT
+
         logger.info(
             "ranking.fold_ready",
             run_id=run_id,
@@ -339,16 +451,30 @@ def main(argv: list[str] | None = None) -> int:
             targets=len(fold.targets),
         )
 
+        started = time.perf_counter()
+        tracemalloc.start()
         try:
-            models, identities = _fit_sources(dataset, fold.history, config, args, logger, run_id)
-            frame, stats = _retrieve_and_label(models, dataset, fold, args, logger, run_id)
+            models, identities = _fit_sources(
+                dataset,
+                fold.history,
+                fold.targets,
+                config,
+                args,
+                logger,
+                run_id,
+            )
+            frame, stats, failed = _retrieve_and_label(models, dataset, fold, args, logger, run_id)
         except OmniRankError as exc:
+            tracemalloc.stop()
             logger.error("ranking.build_failed", run_id=run_id, reason=str(exc))
             return RUN_ERROR_EXIT
+        _, peak_bytes = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
 
         validate_snapshot(frame)
-        destination = RANKING_ROOT / f"{args.split}_candidates.parquet"
-        frame.to_parquet(destination, index=False)
+        for identity in identities:
+            if identity.source in failed:
+                identity = identity
 
         manifest = build_manifest(
             fold_id=f"offset_{args.offset}",
@@ -360,12 +486,24 @@ def main(argv: list[str] | None = None) -> int:
             candidate_budget=args.budget,
             aggregation={"strategy": "reciprocal_rank_fusion", "sources": list(SOURCES)},
             checksum=snapshot_checksum(frame),
+            degraded=bool(failed),
+            degraded_sources=failed,
+            wall_seconds=time.perf_counter() - started,
+            peak_memory_mb=peak_bytes / 1e6,
         )
-        write_manifest(manifest, RANKING_ROOT / f"{args.split}_snapshot_manifest.json")
+
+        # Manifest first would leave a record of a snapshot that does not exist
+        # if the write failed; data first would leave data nothing can identify.
+        # The atomic rename makes the data step all-or-nothing, so the manifest
+        # follows it.
+        write_snapshot_atomically(frame, destination)
+        write_manifest(manifest, manifest_path)
         logger.info(
             "ranking.snapshot_written",
             run_id=run_id,
             path=str(destination),
+            degraded=bool(failed),
+            degraded_sources=failed,
             **stats.to_dict(),
         )
     return 0
@@ -378,8 +516,14 @@ def _retrieve_and_label(
     args: argparse.Namespace,
     logger: Any,
     run_id: str,
-) -> tuple[pd.DataFrame, SnapshotStats]:
-    """Retrieve from every source, fuse, and label against the held-out target."""
+) -> tuple[pd.DataFrame, SnapshotStats, list[str]]:
+    """Retrieve from every source, fuse, and label against the held-out target.
+
+    Returns the frame, its statistics, and the list of sources that failed. A
+    failure is fatal unless ``--allow-source-failure`` was given: a snapshot
+    missing a retriever describes a candidate pool serving would never produce,
+    and a ranker trained on it is fitted to the wrong distribution.
+    """
     from omnirank.models.base import Candidate
     from omnirank.retrieval.aggregation import build_aggregator
 
@@ -389,66 +533,93 @@ def _retrieve_and_label(
     external_item = dataset.internal_to_external_items()
     internal_item = {name: internal for internal, name in external_item.items()}
 
-    targets = fold.targets.set_index("internal_user_id")["internal_item_id"].to_dict()
-    users = [user for user in sorted(targets) if user in external_user]
+    # The cutoff policy: a query may use only interactions strictly earlier
+    # than the target it is predicting. The target's own timestamp is therefore
+    # the exclusive boundary, and it is a real time rather than a fold label.
+    targets = fold.targets.set_index("internal_user_id")
+    target_items = targets["internal_item_id"].to_dict()
+    target_times = targets["timestamp"].to_dict()
+
+    users = [user for user in sorted(target_items) if user in external_user]
     if args.max_users is not None:
         users = users[: args.max_users]
 
     aggregator = build_aggregator("reciprocal_rank_fusion")
     stats = SnapshotStats()
     blocks: list[pd.DataFrame] = []
+    failed_sources: list[str] = []
 
     for start in range(0, len(users), USER_BATCH):
         chunk = users[start : start + USER_BATCH]
         names = [external_user[user] for user in chunk]
-        per_source_lists: dict[str, dict[str, list[str]]] = {}
+        per_source_lists: dict[str, dict[str, list[Any]]] = {}
         for source, model in models.items():
             try:
-                per_source_lists[source] = model.recommend_batch(names, args.budget)
-            except Exception as exc:  # a dead source must not kill the snapshot
+                per_source_lists[source] = model.recommend_batch_scored(names, args.budget)
+            except Exception as exc:
+                reason = f"{type(exc).__name__}: {exc}"[:200]
                 logger.error(
                     "ranking.source_retrieval_failed",
                     run_id=run_id,
                     source=source,
-                    reason=str(exc)[:200],
+                    reason=reason,
                 )
+                if not args.allow_source_failure:
+                    raise OmniRankError(
+                        f"Required retriever {source!r} failed during snapshot generation. "
+                        "Pass --allow-source-failure only for development snapshots.",
+                    ) from exc
+                if source not in failed_sources:
+                    failed_sources.append(source)
                 per_source_lists[source] = {}
 
         rows: list[dict[str, Any]] = []
         for user, name in zip(chunk, names, strict=True):
-            target_internal = int(targets[user])
+            target_internal = int(target_items[user])
             target_external = external_item.get(target_internal)
-            if target_external is None:
+            cutoff = target_times.get(user)
+            if target_external is None or cutoff is None:
                 continue
-            per_source: dict[str, list[tuple[str, float]]] = {}
-            candidate_lists: dict[str, list[Candidate]] = {}
-            for source in SOURCES:
-                items = per_source_lists.get(source, {}).get(name, [])
-                # Rank position is the score carried into fusion; RRF consumes
-                # ranks, and a raw score would be incomparable across sources.
-                per_source[source] = [
-                    (item, 1.0 / (position + 1)) for position, item in enumerate(items)
+
+            per_source = {
+                source: per_source_lists.get(source, {}).get(name, []) for source in SOURCES
+            }
+            for source, scored in per_source.items():
+                stats.source_contributions[source] = stats.source_contributions.get(
+                    source, 0
+                ) + len(scored)
+
+            candidate_lists = {
+                source: [
+                    Candidate(
+                        item_id=candidate.item_id,
+                        # RRF consumes ranks, so the value here only orders the
+                        # list; the model's real score travels separately in
+                        # `per_source` and lands in its own column.
+                        score=1.0 / candidate.rank,
+                        sources=(source,),
+                    )
+                    for candidate in scored
                 ]
-                candidate_lists[source] = [
-                    Candidate(item_id=item, score=1.0 / (position + 1), sources=(source,))
-                    for position, item in enumerate(items)
-                ]
+                for source, scored in per_source.items()
+            }
             if not any(candidate_lists.values()):
                 stats.queries += 1
                 stats.zero_positive_queries += 1
                 stats.candidates_per_query.append(0)
+                stats.cutoffs.append(int(cutoff))
                 continue
 
-            fused_result = aggregator.aggregate(candidate_lists, limit=args.budget * len(SOURCES))
+            fused_result = aggregator.aggregate(candidate_lists, limit=FUSED_POOL_LIMIT)
             fused = [(item.item_id, float(item.score)) for item in fused_result.candidates]
 
             query_rows = build_snapshot_rows(
-                query_id=f"offset{args.offset}:{name}",
+                query_id=f"{args.split}:offset{args.offset}:{name}",
                 external_user_id=name,
                 internal_user_id=user,
                 target_external_item=target_external,
                 target_internal_item=target_internal,
-                as_of_timestamp=f"offset_{args.offset}",
+                as_of_timestamp=int(cutoff),
                 fold_id=f"offset_{args.offset}",
                 split=args.split,
                 candidate_budget=args.budget,
@@ -460,6 +631,7 @@ def _retrieve_and_label(
             stats.queries += 1
             stats.rows += len(query_rows)
             stats.candidates_per_query.append(len(query_rows))
+            stats.cutoffs.append(int(cutoff))
             if any(row["label"] for row in query_rows):
                 stats.positive_queries += 1
             else:
@@ -477,7 +649,7 @@ def _retrieve_and_label(
 
     if not blocks:
         raise OmniRankError("No candidates were produced for any query")
-    return pd.concat(blocks, ignore_index=True), stats
+    return pd.concat(blocks, ignore_index=True), stats, failed_sources
 
 
 if __name__ == "__main__":
